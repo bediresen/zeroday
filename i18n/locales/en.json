@@ -4,7 +4,22 @@
     "ariaMain": "Main menu",
     "emailLogs": "Email log",
     "settings": "Settings",
-    "localeGroup": "Language"
+    "localeGroup": "Language",
+    "logout": "Log out"
+  },
+  "login": {
+    "title": "Sign in",
+    "lead": "Sign in to use the CVE module. Create an account if registration is enabled.",
+    "tabLogin": "Sign in",
+    "tabRegister": "Register",
+    "username": "Username",
+    "password": "Password",
+    "submitLogin": "Sign in",
+    "submitRegister": "Create account",
+    "working": "Working…",
+    "fillAll": "Enter username and password.",
+    "errorGeneric": "Something went wrong.",
+    "registerClosed": "Registration is disabled. Sign in with an existing account."
   },
   "emailLogs": {
     "title": "Email log",

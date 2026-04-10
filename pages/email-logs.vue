@@ -16,9 +16,12 @@ type LogsResponse = {
   data: { items: LogItem[] }
 }
 
+const unauthorizedHandlers = useUnauthorizedRedirectHandlers()
+
 const { data, pending, error, refresh } = await useFetch<LogsResponse>('/api/v2/cve-email-logs', {
   key: 'cve-email-logs',
   query: { limit: 100 },
+  ...unauthorizedHandlers,
 })
 
 const items = computed(() => data.value?.data?.items ?? [])

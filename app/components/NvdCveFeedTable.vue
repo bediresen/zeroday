@@ -51,10 +51,12 @@ interface NvdApiResponse {
 const requestFetch = useRequestFetch()
 const { t, locale } = useI18n()
 const { vulnStatus, severity: severityLabel } = useNvdLocale()
+const unauthorizedHandlers = useUnauthorizedRedirectHandlers()
 
 const { data: nvd, pending, error, refresh } = await useFetch<NvdApiResponse>(props.fetchPath, {
   key: props.fetchKey,
   $fetch: requestFetch,
+  ...unauthorizedHandlers,
 })
 
 const vulnerabilities = computed(() => nvd.value?.data?.vulnerabilities ?? [])

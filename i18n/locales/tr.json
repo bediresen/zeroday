@@ -4,7 +4,22 @@
     "ariaMain": "Ana menü",
     "emailLogs": "E-posta günlüğü",
     "settings": "Ayarlar",
-    "localeGroup": "Dil seçimi"
+    "localeGroup": "Dil seçimi",
+    "logout": "Çıkış"
+  },
+  "login": {
+    "title": "Oturum aç",
+    "lead": "CVE modülüne erişmek için giriş yapın. Hesabınız yoksa kayıt olabilirsiniz (yönetici kaydı kapatmışsa yalnızca giriş görünür).",
+    "tabLogin": "Giriş yap",
+    "tabRegister": "Kayıt ol",
+    "username": "Kullanıcı adı",
+    "password": "Şifre",
+    "submitLogin": "Giriş yap",
+    "submitRegister": "Kayıt ol",
+    "working": "İşleniyor…",
+    "fillAll": "Kullanıcı adı ve şifre girin.",
+    "errorGeneric": "İşlem başarısız.",
+    "registerClosed": "Yeni kullanıcı kaydı kapalı. Mevcut hesabınızla giriş yapın."
   },
   "emailLogs": {
     "title": "E-posta günlüğü",

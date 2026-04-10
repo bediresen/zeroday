@@ -1,4 +1,10 @@
-import { getCveEmailLogModel, getCveModel, getCveSettingsModel, getSequelize } from './db'
+import {
+  getCveEmailLogModel,
+  getCveModel,
+  getCveSettingsModel,
+  getSequelize,
+  getUserModel,
+} from './db'
 
 let cveSchemaEnsured = false
 
@@ -14,6 +20,9 @@ export async function ensureCveSchema(): Promise<void> {
 
   const CveEmailLog = getCveEmailLogModel()
   await CveEmailLog.sync()
+
+  const User = getUserModel()
+  await User.sync()
 
   await migrateDescriptionTrColumnIfNeeded()
 

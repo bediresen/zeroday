@@ -23,16 +23,23 @@ export default defineNuxtConfig({
   },
   pages: true,
   runtimeConfig: {
+    sessionSecret: process.env.NUXT_SESSION_SECRET || '',
+    /** `false` ise kayıt API’si kapatılır (env: NUXT_AUTH_ALLOW_REGISTER=false) */
+    authAllowRegister: process.env.NUXT_AUTH_ALLOW_REGISTER !== 'false',
+    public: {
+      /** Giriş sayfasında «Kayıt ol» gösterimi (sunucu ile aynı env) */
+      authAllowRegister: process.env.NUXT_AUTH_ALLOW_REGISTER !== 'false',
+    },
     /** Azure AI Translator — env: NUXT_AZURE_TRANSLATOR_KEY */
     azureTranslatorKey: process.env.AZURE_TRANSLATOR_KEY,
     /** Azure kaynak bölgesi (ör. westeurope) — env: NUXT_AZURE_TRANSLATOR_REGION; çok hizmetli anahtarlarda gerekli */
     azureTranslatorRegion: 'westeurope',
     nvdApiKey: '',
     cve: {
-      dialect: 'mysql',
+      dialect: 'postgres',
       url: '',
       host: '127.0.0.1',
-      port: 3306,
+      port: 5432,
       database: '',
       user: '',
       password: '',

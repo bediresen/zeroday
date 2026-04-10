@@ -54,9 +54,11 @@ const recipientChips = ref<string[]>([])
 const recipientInput = ref('')
 const recipientField = ref<HTMLInputElement | null>(null)
 
+const unauthorizedHandlers = useUnauthorizedRedirectHandlers()
+
 const { data, refresh, pending, error } = await useFetch<{
   data: { smtp: SmtpPayload; cron: CronPayload; email: EmailPayload }
-}>('/api/v2/cve-settings', { key: 'cve-settings' })
+}>('/api/v2/cve-settings', { key: 'cve-settings', ...unauthorizedHandlers })
 
 watch(
   data,

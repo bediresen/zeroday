@@ -36,9 +36,12 @@ const detailUrl = computed(
   () => `/api/v2/cves/nvd/${encodeURIComponent(cveParam.value)}`
 )
 
+const unauthorizedHandlers = useUnauthorizedRedirectHandlers()
+
 const { data, pending, error, refresh } = await useFetch<DetailResponse>(detailUrl, {
   key: computed(() => `nvd-detail-${cveParam.value}`),
   $fetch: requestFetch,
+  ...unauthorizedHandlers,
 })
 
 const cve = computed(() => data.value?.data?.vulnerability?.cve)

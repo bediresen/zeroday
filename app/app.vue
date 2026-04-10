@@ -1,5 +1,27 @@
 <script setup lang="ts">
 const { t, locale, setLocale } = useI18n()
+const route = useRoute()
+
+const { data: authMe, refresh: refreshAuth } = await useAsyncData(
+  'auth-me',
+  () =>
+    $fetch<{ data: { user: { id: number; username: string } | null } }>('/api/auth/me'),
+  {
+    watch: [() => route.path],
+  }
+)
+
+const authUser = computed(() => authMe.value?.data?.user ?? null)
+
+async function logout() {
+  try {
+    await $fetch('/api/auth/logout', { method: 'POST' })
+  } catch {
+    /* ignore */
+  }
+  await refreshAuth()
+  await navigateTo('/login')
+}
 </script>
 
 <template>
@@ -9,10 +31,14 @@ const { t, locale, setLocale } = useI18n()
       <div class="app-header-inner">
         <NuxtLink to="/" class="brand">{{ t('nav.brand') }}</NuxtLink>
         <div class="app-header-actions">
-          <nav class="app-nav" :aria-label="t('nav.ariaMain')">
+          <nav v-if="authUser" class="app-nav" :aria-label="t('nav.ariaMain')">
             <NuxtLink to="/email-logs" class="nav-link">{{ t('nav.emailLogs') }}</NuxtLink>
             <NuxtLink to="/settings" class="nav-link">{{ t('nav.settings') }}</NuxtLink>
           </nav>
+          <span v-if="authUser" class="nav-user" :title="authUser.username">{{ authUser.username }}</span>
+          <button v-if="authUser" type="button" class="nav-logout" @click="logout">
+            {{ t('nav.logout') }}
+          </button>
           <div class="locale-switch" role="group" :aria-label="t('nav.localeGroup')">
             <button
               type="button"
@@ -225,6 +251,35 @@ body {
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.nav-user {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--app-header-muted);
+}
+
+.nav-logout {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--app-header-text);
+  background: rgba(0, 0, 0, 0.2);
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.nav-logout:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.35);
 }
 
 .app-main {
