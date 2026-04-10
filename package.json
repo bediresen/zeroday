@@ -1,0 +1,32 @@
+{
+  "name": "cve-module",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1027.0",
+    "@nuxtjs/i18n": "^10.2.4",
+    "axios": "^1.14.0",
+    "luxon": "^3.7.2",
+    "mjml": "^4.18.0",
+    "mysql2": "^3.20.0",
+    "nodemailer": "^8.0.5",
+    "nuxt": "^4.4.2",
+    "pdfmake": "^0.3.7",
+    "pg": "^8.20.0",
+    "sequelize": "^6.37.8",
+    "vue": "^3.5.31",
+    "vue-router": "^5.0.4"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.1",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pdfmake": "^0.3.2"
+  }
+}

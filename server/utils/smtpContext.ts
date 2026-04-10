@@ -1,0 +1,2 @@
+/** Tek kiracılı modülde Phishy şemasındaki zorunlu UUID alanları için sabit kimlik. */
+export const SMTP_SYSTEM_SCOPE_ID = '00000000-0000-0000-0000-000000000001'
