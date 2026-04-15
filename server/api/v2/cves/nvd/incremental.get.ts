@@ -16,6 +16,7 @@ export default defineEventHandler(async () => {
 
     const inc = await fetchNvdIncrementalSlice(window.pubStartDate, {
       apiKey: nvdApiKey || undefined,
+      pubEndDateCapIso: window.pubEndDate,
     })
 
     const incrementalWindowSummary = await getLiveFeedWindowSummary()

@@ -3,7 +3,7 @@ import { DateTime } from 'luxon'
 import { Op } from 'sequelize'
 import { ensureCveSchema } from './cveSchema'
 import { getCveModel, getSequelize } from './db'
-import { translateManyEnToTr } from './translateText'
+import { normalizeDescriptionForLlm, translateManyCveStructuredEnToTr } from './translateText'
 
 const NVD_CVE_URL = 'https://services.nvd.nist.gov/rest/json/cves/2.0'
 const DEFAULT_RESULTS_PER_PAGE = 2000
@@ -130,16 +130,29 @@ export type NvdFetchResult = {
   vulnerabilities: NvdCveItem[]
 }
 
-/** API yanıtında DB’deki Türkçe açıklama (Kaydet sonrası dolabilir) */
-export type NvdCveItemWithTr = NvdCveItem & { descriptionTr?: string | null }
+/** API yanıtında DB’deki Türkçe açıklama ve LLM ürün listesi (Kaydet sonrası dolabilir) */
+export type NvdCveItemWithTr = NvdCveItem & {
+  descriptionTr?: string | null
+  affectedProducts?: string[] | null
+}
 
 type CveDbRowPdf = {
   id: string
   published_at: Date | string | null
   description: string | null
   description_tr: string | null
+  affected_products?: unknown
   vuln_status: string | null
   raw_json: unknown
+}
+
+function dbAffectedProductsValue(v: unknown): string[] | null {
+  if (v == null) return null
+  if (!Array.isArray(v)) return null
+  const xs = v
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .map((s) => s.trim())
+  return xs.length > 0 ? xs : null
 }
 
 /** DB `published_at` anı NVD ile aynı sözleşmede (UTC ISO); UI `formatNvdDate(..., timeZone)` ile gösterilir */
@@ -173,6 +186,7 @@ function mapDbRowToNvdCveItemWithTr(row: CveDbRowPdf): NvdCveItemWithTr | null {
       return {
         cve,
         descriptionTr: row.description_tr ?? null,
+        affectedProducts: dbAffectedProductsValue(row.affected_products),
       }
     }
   }
@@ -197,6 +211,7 @@ function mapDbRowToNvdCveItemWithTr(row: CveDbRowPdf): NvdCveItemWithTr | null {
         : [{ lang: 'en', value: '—' }],
     },
     descriptionTr: row.description_tr ?? null,
+    affectedProducts: dbAffectedProductsValue(row.affected_products),
   }
 }
 
@@ -310,7 +325,7 @@ export async function getMaxPublishedAtSince(sinceUtc: Date): Promise<Date | nul
  */
 export async function fetchNvdIncrementalSlice(
   windowPubStartDate: string,
-  options?: { apiKey?: string }
+  options?: { apiKey?: string; /** Günlük rapor: NVD üst sınırı (örn. dünün son anı) */ pubEndDateCapIso?: string }
 ): Promise<{
   vulnerabilities: NvdCveItemWithTr[]
   pubStartDate: string
@@ -318,7 +333,10 @@ export async function fetchNvdIncrementalSlice(
   totalResults: number
 }> {
   const startUtc = parseNvdIsoAsUtc(windowPubStartDate)
-  const pubEndForFetch = DateTime.utc().toISO()!
+  const nowUtc = DateTime.utc()
+  const capRaw = options?.pubEndDateCapIso?.trim()
+  const capDt = capRaw ? DateTime.fromISO(capRaw, { zone: 'utc' }) : null
+  const pubEndForFetch = capDt?.isValid && capDt < nowUtc ? capDt.toISO()! : nowUtc.toISO()!
   if (!startUtc) {
     return { vulnerabilities: [], pubStartDate: windowPubStartDate, pubEndDate: pubEndForFetch, totalResults: 0 }
   }
@@ -389,31 +407,37 @@ export async function attachDescriptionTrFromDb(
     ),
   ]
   if (ids.length === 0) {
-    return vulnerabilities.map((v) => ({ ...v, descriptionTr: null }))
+    return vulnerabilities.map((v) => ({ ...v, descriptionTr: null, affectedProducts: null }))
   }
   try {
     await ensureCveSchema()
     const Cve = getCveModel()
     const rows = (await Cve.findAll({
       where: { id: { [Op.in]: ids } },
-      attributes: ['id', 'description_tr'],
+      attributes: ['id', 'description_tr', 'affected_products'],
       raw: true,
-    })) as { id: string; description_tr: string | null }[]
+    })) as { id: string; description_tr: string | null; affected_products: unknown }[]
 
-    const map = new Map<string, string | null>()
+    const trMap = new Map<string, string | null>()
+    const prodMap = new Map<string, string[] | null>()
     for (const r of rows) {
-      map.set(r.id, r.description_tr ?? null)
+      trMap.set(r.id, r.description_tr ?? null)
+      prodMap.set(r.id, dbAffectedProductsValue(r.affected_products))
     }
     return vulnerabilities.map((v) => {
       const id = v.cve?.id
+      if (typeof id !== 'string') {
+        return { ...v, descriptionTr: null, affectedProducts: null }
+      }
       return {
         ...v,
-        descriptionTr: typeof id === 'string' ? map.get(id) ?? null : null,
+        descriptionTr: trMap.get(id) ?? null,
+        affectedProducts: prodMap.get(id) ?? null,
       }
     })
   } catch (e) {
     console.warn('[attachDescriptionTrFromDb] DB okunamadı, Türkçe sütunu atlanıyor:', e)
-    return vulnerabilities.map((v) => ({ ...v, descriptionTr: null }))
+    return vulnerabilities.map((v) => ({ ...v, descriptionTr: null, affectedProducts: null }))
   }
 }
 
@@ -511,16 +535,41 @@ const CVE_UPSERT_FIELDS = [
   'vuln_status',
   'description',
   'description_tr',
+  'affected_products',
   'cvss_score',
   'cvss_severity',
   'raw_json',
   'reference_entries',
 ] as const
 
+export type PersistNvdLlmSummary = {
+  /** Bu kayıtta zaten DB’de olan CVE sayısı (LLM tekrarlanmadı) */
+  reusedFromDb: number
+  /** Bu istekte DB’de olmayan satır sayısı */
+  newRowCount: number
+  /** Yeni satırlardan LLM kuyruğuna alınmayan (boş açıklama, anahtar yok vb.) */
+  newRowsSkippedLlm: number
+  /** OpenAI’ye gönderilmek üzere sıraya alınan CVE sayısı */
+  llmQueueCount: number
+  /** Gerçekleşen OpenAI HTTP isteği sayısı (≈ kuyruk; önbellek sonrası) */
+  openaiRequestCount: number
+  /** Bellek içi çeviri önbelleği isabeti */
+  memoryCacheHits: number
+  /** Yapılandırılmış çeviri bloğunun süresi (ms); kuyruk boşsa 0 */
+  llmDurationMs: number
+  hadOpenaiKey: boolean
+}
+
+export type PersistNvdVulnerabilitiesResult = {
+  upserted: number
+  skippedInvalid: number
+  llm: PersistNvdLlmSummary
+}
+
 export async function persistNvdVulnerabilities(
   items: NvdCveItem[],
-  options?: { azureTranslatorKey?: string; azureTranslatorRegion?: string }
-): Promise<{ upserted: number; skippedInvalid: number }> {
+  options?: { openaiApiKey?: string; openaiModel?: string; openaiBaseUrl?: string }
+): Promise<PersistNvdVulnerabilitiesResult> {
   await ensureCveSchema()
   const sequelize = getSequelize()
   const Cve = getCveModel()
@@ -529,13 +578,31 @@ export async function persistNvdVulnerabilities(
     .filter((r): r is Record<string, unknown> => r !== null)
   const skippedInvalid = items.length - rows.length
   if (rows.length === 0) {
-    return { upserted: 0, skippedInvalid }
+    return {
+      upserted: 0,
+      skippedInvalid,
+      llm: {
+        reusedFromDb: 0,
+        newRowCount: 0,
+        newRowsSkippedLlm: 0,
+        llmQueueCount: 0,
+        openaiRequestCount: 0,
+        memoryCacheHits: 0,
+        llmDurationMs: 0,
+        hadOpenaiKey: Boolean(options?.openaiApiKey?.trim()),
+      },
+    }
   }
 
-  const azureKey = options?.azureTranslatorKey?.trim()
+  console.info(
+    `[NVD persist] Kayıt hazırlığı: ${rows.length} satır (istekten ${items.length}, geçersiz atlanan ${skippedInvalid}).`
+  )
+
+  const openaiKey = options?.openaiApiKey?.trim()
   const translateCfg = {
-    azureTranslatorKey: azureKey,
-    azureTranslatorRegion: options?.azureTranslatorRegion?.trim(),
+    openaiApiKey: openaiKey,
+    openaiModel: options?.openaiModel?.trim(),
+    openaiBaseUrl: options?.openaiBaseUrl?.trim(),
   }
 
   const ids = rows
@@ -543,9 +610,14 @@ export async function persistNvdVulnerabilities(
     .filter((id): id is string => typeof id === 'string' && id.length > 0)
   const existingRows = (await Cve!.findAll({
     where: { id: { [Op.in]: ids } },
-    attributes: ['id', 'description', 'description_tr'],
+    attributes: ['id', 'description', 'description_tr', 'affected_products'],
     raw: true,
-  })) as { id: string; description: string | null; description_tr: string | null }[]
+  })) as {
+    id: string
+    description: string | null
+    description_tr: string | null
+    affected_products: unknown
+  }[]
   const existingById = new Map(existingRows.map((e) => [e.id, e]))
 
   function normDesc(s: unknown): string {
@@ -553,6 +625,7 @@ export async function persistNvdVulnerabilities(
   }
 
   const toTranslate: { row: Record<string, unknown>; text: string }[] = []
+  let reusedFromDb = 0
 
   for (const row of rows) {
     const id = row.id as string
@@ -560,31 +633,61 @@ export async function persistNvdVulnerabilities(
     const desc = row.description
 
     if (ex) {
+      reusedFromDb++
       row.description_tr = ex.description_tr ?? null
+      row.affected_products = ex.affected_products ?? null
       continue
     }
 
-    if (azureKey && typeof desc === 'string' && normDesc(desc) && normDesc(desc) !== '—') {
-      toTranslate.push({ row, text: normDesc(desc) })
+    const descPlain =
+      typeof desc === 'string' ? normalizeDescriptionForLlm(normDesc(desc)) : ''
+    if (openaiKey && descPlain && descPlain !== '—') {
+      toTranslate.push({ row, text: descPlain })
     } else {
       row.description_tr = null
+      row.affected_products = null
     }
   }
 
-  if (toTranslate.length > 0 && azureKey) {
-    const translated = await translateManyEnToTr(
-      toTranslate.map((x) => x.text),
+  const newRowCount = rows.length - reusedFromDb
+  const llmQueueCount = toTranslate.length
+  const newRowsSkippedLlm = Math.max(0, newRowCount - llmQueueCount)
+
+  let openaiRequestCount = 0
+  let memoryCacheHits = 0
+  let llmDurationMs = 0
+
+  if (toTranslate.length > 0 && openaiKey) {
+    console.info(
+      `[NVD persist] LLM aşaması başlıyor: kuyruk ${toTranslate.length} CVE (DB’den korunan ${reusedFromDb}, yeni satır ${newRowCount}, LLM dışı kalan yeni ${newRowsSkippedLlm}).`
+    )
+    const llmT0 = Date.now()
+    const { translations: structured, stats } = await translateManyCveStructuredEnToTr(
+      toTranslate.map((x) => ({ cveId: x.row.id as string, text: x.text })),
       translateCfg
     )
+    llmDurationMs = Date.now() - llmT0
+    openaiRequestCount = stats.openaiRequestCount
+    memoryCacheHits = stats.memoryCacheHits
+    console.info(
+      `[NVD persist] LLM aşaması bitti: ${llmDurationMs} ms (OpenAI istekleri ${openaiRequestCount}, bellek önbelleği ${memoryCacheHits}).`
+    )
     toTranslate.forEach((item, i) => {
-      const tr = translated[i]!
+      const r = structured[i]!
       const raw = item.row.description
       const d = normDesc(raw)
-      item.row.description_tr = tr.trim() === d ? null : tr
+      const tr = r.descriptionTr.trim()
+      item.row.description_tr = tr === d ? null : tr
+      item.row.affected_products = r.affectedProducts.length > 0 ? r.affectedProducts : null
     })
+  } else {
+    console.info(
+      `[NVD persist] LLM atlandı: kuyruk ${toTranslate.length} (OpenAI anahtarı: ${openaiKey ? 'var' : 'yok'}). DB’den korunan ${reusedFromDb}, yeni ${newRowCount}.`
+    )
   }
 
   const chunkSize = 500
+  console.info(`[NVD persist] Veritabanı yazımı: ${rows.length} satır, parça boyutu ${chunkSize}.`)
   const t = await sequelize.transaction()
   try {
     for (let i = 0; i < rows.length; i += chunkSize) {
@@ -599,5 +702,20 @@ export async function persistNvdVulnerabilities(
     await t.rollback()
     throw e
   }
-  return { upserted: rows.length, skippedInvalid }
+  console.info(`[NVD persist] Bitti: ${rows.length} kayıt upsert.`)
+
+  return {
+    upserted: rows.length,
+    skippedInvalid,
+    llm: {
+      reusedFromDb,
+      newRowCount,
+      newRowsSkippedLlm,
+      llmQueueCount,
+      openaiRequestCount,
+      memoryCacheHits,
+      llmDurationMs,
+      hadOpenaiKey: Boolean(openaiKey),
+    },
+  }
 }

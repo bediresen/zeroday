@@ -30,10 +30,12 @@ export default defineNuxtConfig({
       /** Giriş sayfasında «Kayıt ol» gösterimi (sunucu ile aynı env) */
       authAllowRegister: process.env.NUXT_AUTH_ALLOW_REGISTER !== 'false',
     },
-    /** Azure AI Translator — env: NUXT_AZURE_TRANSLATOR_KEY */
-    azureTranslatorKey: process.env.AZURE_TRANSLATOR_KEY,
-    /** Azure kaynak bölgesi (ör. westeurope) — env: NUXT_AZURE_TRANSLATOR_REGION; çok hizmetli anahtarlarda gerekli */
-    azureTranslatorRegion: 'westeurope',
+    /** CVE açıklaması çevirisi (OpenAI Chat Completions) — env: NUXT_OPENAI_API_KEY veya OPENAI_API_KEY */
+    openaiApiKey: process.env.NUXT_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
+    /** Örn. gpt-4o-mini — env: NUXT_OPENAI_MODEL */
+    openaiModel: process.env.NUXT_OPENAI_MODEL || 'gpt-5-nano',
+    /** Varsayılan https://api.openai.com/v1 — uyumlu uç noktalar için env: NUXT_OPENAI_BASE_URL */
+    openaiBaseUrl: process.env.NUXT_OPENAI_BASE_URL || '',
     nvdApiKey: '',
     cve: {
       dialect: 'postgres',

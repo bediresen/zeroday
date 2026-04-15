@@ -1,11 +1,13 @@
 <script setup lang="ts">
 const { t, locale, setLocale } = useI18n()
 const route = useRoute()
+/** SSR’da oturum çerezini iletir; düz `$fetch` ile `/api/auth/me` bazen null döner, nav `v-if` ile kaybolur */
+const requestFetch = useRequestFetch()
 
 const { data: authMe, refresh: refreshAuth } = await useAsyncData(
   'auth-me',
   () =>
-    $fetch<{ data: { user: { id: number; username: string } | null } }>('/api/auth/me'),
+    requestFetch<{ data: { user: { id: number; username: string } | null } }>('/api/auth/me'),
   {
     watch: [() => route.path],
   }

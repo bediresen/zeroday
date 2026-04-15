@@ -1,5 +1,5 @@
 import { fetchNvdCvesByPubRange, persistNvdVulnerabilities } from './nvdCve.helper'
-import { getAzureTranslatorOptionsForPersist, getNvdApiKeyForFetch } from './cveRuntimeConfig'
+import { getOpenAiTranslateOptionsForPersist, getNvdApiKeyForFetch } from './cveRuntimeConfig'
 import { resolveNvdPublicationWindow } from './nvdPublicationWindow'
 import { getCronSettingsResolved } from './cveSettings'
 
@@ -22,10 +22,11 @@ export async function runNvdScheduledJob(): Promise<void> {
   })
 
   const persistResult = await persistNvdVulnerabilities(fetched.vulnerabilities, {
-    ...getAzureTranslatorOptionsForPersist(),
+    ...getOpenAiTranslateOptionsForPersist(),
   })
 
+  const L = persistResult.llm
   console.log(
-    `[nvd-scheduled] NVD ${fetched.totalResults} kayıt; DB ${persistResult.upserted} yazıldı, ${persistResult.skippedInvalid} atlandı (${window.windowSummary})`
+    `[nvd-scheduled] NVD ${fetched.totalResults} kayıt; DB ${persistResult.upserted} yazıldı, ${persistResult.skippedInvalid} atlandı (${window.windowSummary}) | LLM: OpenAI ${L.openaiRequestCount}, önbellek ${L.memoryCacheHits}, ${L.llmDurationMs}ms`
   )
 }

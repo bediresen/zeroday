@@ -7,6 +7,7 @@ export interface CveAttrs {
   vuln_status: string | null
   description: string | null
   description_tr: string | null
+  affected_products: string[] | null
   cvss_score: string | null
   cvss_severity: string | null
   raw_json: unknown
@@ -46,6 +47,10 @@ export function defineCveModel(sequelize: Sequelize): ModelCtor<CveModel> {
       },
       description_tr: {
         type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      affected_products: {
+        type: jsonType,
         allowNull: true,
       },
       cvss_score: {

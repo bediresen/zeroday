@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DateTime } from 'luxon'
 import type { TDocumentDefinitions, Content, TableCell } from 'pdfmake/interfaces'
 import { pickCvssV31Strings, pickEnglishDescription } from '../../app/utils/nvdDisplay'
@@ -32,11 +35,41 @@ function ensurePdfMake() {
   pdfMakeReady = true
 }
 
-function formatDateTrUtc(d: Date): string {
-  const day = String(d.getUTCDate()).padStart(2, '0')
-  const mo = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const y = d.getUTCFullYear()
-  return `${day}.${mo}.${y}`
+const PDF_MODULE_DIR = dirname(fileURLToPath(import.meta.url))
+
+/** `assets/kapak.png` — statik kapak; yalnızca rapor tarihi kodla üstüne basılır */
+function resolveKapakPngPath(): string | null {
+  const candidates = [
+    join(process.cwd(), 'assets', 'kapak.png'),
+    join(PDF_MODULE_DIR, '..', '..', 'assets', 'kapak.png'),
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+/** pdfmake A4 varsayılanı (pt); `kapak.png` ile hizalı — gerekirse tarih kutusunu kaydırmak için */
+const COVER_A4_W_PT = 595.28
+const COVER_A4_H_PT = 841.89
+/** PNG’de boş bırakılan tarih alanının üst kenarı (sayfa sol üstüne göre) */
+const COVER_KAPAK_DATE_TOP_PT = 458
+const COVER_KAPAK_DATE_BOX_W_PT = 268
+const COVER_KAPAK_DATE_LEFT_PT = (COVER_A4_W_PT - COVER_KAPAK_DATE_BOX_W_PT) / 2
+
+function loadKapakCoverDataUrl(): string | null {
+  try {
+    const p = resolveKapakPngPath()
+    if (!p) {
+      console.warn('[nvdTodayPdf] Kapak görseli bulunamadı (assets/kapak.png).')
+      return null
+    }
+    const buf = readFileSync(p)
+    return `data:image/png;base64,${buf.toString('base64')}`
+  } catch (e) {
+    console.warn('[nvdTodayPdf] Kapak görseli okunamadı:', e)
+    return null
+  }
 }
 
 /** NVD `published`: offset yoksa UTC kabul et (NVD yayın anı) */
@@ -100,6 +133,68 @@ function collectCpeLabelsFromCve(cve: Record<string, unknown> | undefined): stri
   return out
 }
 
+function collectProductNamesForCve(item: NvdCveItemWithTr): string[] {
+  const db = item.affectedProducts
+  const dbList = Array.isArray(db)
+    ? db.map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean)
+    : []
+  if (dbList.length > 0) return [...new Set(dbList)]
+  const cve = item.cve as Record<string, unknown> | undefined
+  return [...new Set(collectCpeLabelsFromCve(cve))]
+}
+
+function getCveIdFromItem(item: NvdCveItemWithTr): string {
+  const cve = item.cve as Record<string, unknown> | undefined
+  const id = cve?.id
+  return typeof id === 'string' && id.trim() ? id.trim() : '—'
+}
+
+/** Ürün etiketiyle eşleşen tüm CVE kimlikleri (sıralı, tekrarsız) */
+function collectCveIdsForProductLabel(items: NvdCveItemWithTr[], productLabel: string): string[] {
+  const pLc = productLabel.trim().toLowerCase()
+  const ids = new Set<string>()
+  for (const item of items) {
+    for (const n of collectProductNamesForCve(item)) {
+      if (n.trim().toLowerCase() === pLc) {
+        ids.add(getCveIdFromItem(item))
+        break
+      }
+    }
+  }
+  return [...ids].sort((a, b) => a.localeCompare(b, 'en'))
+}
+
+/** `productBullets` sırasına göre gruplama; eşleşme yoksa listenin sonuna */
+function vulnerabilityProductSortRank(item: NvdCveItemWithTr, productBullets: string[]): number {
+  const names = collectProductNamesForCve(item)
+  const lowerToCanon = new Map(productBullets.map((p) => [p.toLowerCase(), p]))
+  let best = Infinity
+  for (const n of names) {
+    const canon = lowerToCanon.get(n.trim().toLowerCase())
+    if (!canon) continue
+    const idx = productBullets.indexOf(canon)
+    if (idx >= 0 && idx < best) best = idx
+  }
+  return best === Infinity ? productBullets.length : best
+}
+
+function sortVulnerabilitiesByProductBullets(
+  items: NvdCveItemWithTr[],
+  productBullets: string[]
+): NvdCveItemWithTr[] {
+  return [...items].sort((a, b) => {
+    const ra = vulnerabilityProductSortRank(a, productBullets)
+    const rb = vulnerabilityProductSortRank(b, productBullets)
+    if (ra !== rb) return ra - rb
+    return getCveIdFromItem(a).localeCompare(getCveIdFromItem(b), 'en')
+  })
+}
+
+/** pdfmake iç bağlantı hedefi — ürün listesi indeksi ile sabit */
+function pdfProductAnchorId(productIndex: number): string {
+  return `prod-${productIndex}`
+}
+
 function primaryAffectedProduct(cve: Record<string, unknown> | undefined): string {
   const labels = collectCpeLabelsFromCve(cve)
   if (labels.length === 0) return 'Belirtilmemiştir'
@@ -112,6 +207,27 @@ function affectedSystemsText(cve: Record<string, unknown> | undefined): string {
   if (labels.length === 0) return 'Henüz belirtilmemiştir.'
   const unique = [...new Set(labels)]
   return unique.join('\n')
+}
+
+/** Veritabanındaki LLM `affected_products` varsa öncelik; yoksa NVD CPE listesi */
+function primaryProductForPdf(item: NvdCveItemWithTr): string {
+  const db = item.affectedProducts
+  if (Array.isArray(db)) {
+    const first = db.map((s) => (typeof s === 'string' ? s.trim() : '')).find(Boolean)
+    if (first) return first
+  }
+  const cve = item.cve as Record<string, unknown> | undefined
+  return primaryAffectedProduct(cve)
+}
+
+function affectedSystemsTextForPdf(item: NvdCveItemWithTr): string {
+  const db = item.affectedProducts
+  if (Array.isArray(db) && db.length > 0) {
+    const unique = [...new Set(db.map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean))]
+    if (unique.length > 0) return unique.join('\n')
+  }
+  const cve = item.cve as Record<string, unknown> | undefined
+  return affectedSystemsText(cve)
 }
 
 function weaknessNames(cve: Record<string, unknown> | undefined): string {
@@ -131,6 +247,26 @@ type CvssMetricV31 = {
   source?: string
   type?: string
   cvssData?: { baseScore?: number; baseSeverity?: string }
+}
+
+/** Tablo üst şeridinde tek satır CVSS özeti (CVE kimliği ile aynı satır) */
+function cvssScoreLineForTableHeader(cve: Record<string, unknown> | undefined): string {
+  const metrics = cve?.metrics as {
+    cvssMetricV31?: CvssMetricV31[]
+    cvssMetricV40?: CvssMetricV31[]
+  } | undefined
+  const list = metrics?.cvssMetricV31?.length ? metrics.cvssMetricV31 : metrics?.cvssMetricV40
+  if (Array.isArray(list) && list.length > 0) {
+    const primary = list.find((m) => m.type === 'Primary') || list[0]
+    const score = primary?.cvssData?.baseScore
+    const sev = primary?.cvssData?.baseSeverity
+    const sc = typeof score === 'number' ? String(score) : '—'
+    const tail = typeof sev === 'string' && sev.trim() ? ` (${sev})` : ''
+    return `${sc}${tail}`
+  }
+  const f = pickCvssV31Strings(cve as NvdCveItem['cve'])
+  if (f.score === '—' && f.severity === '—') return '—'
+  return `${f.score} (${f.severity})`
 }
 
 function formatCvssBlock(cve: Record<string, unknown> | undefined): string {
@@ -212,7 +348,8 @@ function pickDescriptionForPdf(item: NvdCveItemWithTr): string {
 function buildCveDetailTable(
   item: NvdCveItemWithTr,
   pageBreakBefore: boolean,
-  displayTimeZone: string
+  displayTimeZone: string,
+  options?: { pdfAnchorIds?: string[] }
 ): Content {
   const cveRaw = item.cve
   const cve = cveRaw as Record<string, unknown> | undefined
@@ -221,26 +358,34 @@ function buildCveDetailTable(
   const published = formatPublishedForPdf(publishedRaw, displayTimeZone)
   const status = typeof cve?.vulnStatus === 'string' ? cve.vulnStatus : '—'
   const description = pickDescriptionForPdf(item)
+  const scoreHeader = cvssScoreLineForTableHeader(cve)
 
   const body: TableCell[][] = [
     [
       {
         text: id,
         style: 'cveTableTitle',
-        colSpan: 2,
         fillColor: '#1e1b36',
         color: '#ffffff',
-        border: [true, true, true, true],
+        border: [true, true, false, true],
+        alignment: 'left',
       },
-      {},
+      {
+        text: scoreHeader,
+        style: 'cveTableTitle',
+        fillColor: '#1e1b36',
+        color: '#ffffff',
+        border: [false, true, true, true],
+        alignment: 'right',
+      },
     ],
-    [labelCell('Zafiyetin Bulunduğu Ürün'), valueCell(primaryAffectedProduct(cve))],
+    [labelCell('Zafiyetin Bulunduğu Ürün'), valueCell(primaryProductForPdf(item))],
     [labelCell('Zafiyetin Adı'), valueCell(weaknessNames(cve))],
     [labelCell('Zafiyet Açıklaması'), valueCell(description)],
     [labelCell('Yayınlanma Tarihi'), valueCell(published)],
     [labelCell('CVSS Skoru'), valueCell(formatCvssBlock(cve))],
     [labelCell('Durum'), valueCell(status)],
-    [labelCell('Etkilenen Sistemler'), valueCell(affectedSystemsText(cve))],
+    [labelCell('Etkilenen Sistemler'), valueCell(affectedSystemsTextForPdf(item))],
     [labelCell('Referanslar'), referencesValueCell(cve)],
   ]
 
@@ -263,10 +408,38 @@ function buildCveDetailTable(
     margin: [0, 0, 0, 18],
   }
 
+  const anchorIds = options?.pdfAnchorIds?.filter(Boolean) ?? []
+  const block: Content =
+    anchorIds.length > 0
+      ? {
+          stack: [
+            ...anchorIds.map(
+              (aid) =>
+                ({
+                  text: '\u200b',
+                  fontSize: 0.5,
+                  lineHeight: 0.5,
+                  color: '#ffffff',
+                  id: aid,
+                }) as Content
+            ),
+            tableBlock,
+          ],
+        }
+      : tableBlock
+
   if (pageBreakBefore) {
-    return { stack: [tableBlock], pageBreak: 'before' }
+    return { stack: [block], pageBreak: 'before' }
   }
-  return tableBlock
+  return block
+}
+
+/** `… (Europe/Istanbul)` gibi sondaki IANA saat dilimi parantezini PDF metninden çıkarır */
+function stripTrailingIanaZoneFromSummary(text: string): string {
+  return text
+    .trim()
+    .replace(/\s*\([A-Za-z][A-Za-z0-9_]*\/[A-Za-z][A-Za-z0-9_/]*\)\s*$/u, '')
+    .trim()
 }
 
 export type NvdTodayPdfInput = {
@@ -287,63 +460,68 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
     createPdf: (def: TDocumentDefinitions) => { getBuffer: () => Promise<Buffer> }
   }
 
-  const dayUtc = new Date()
-  const reportDateStr = formatDateTrUtc(dayUtc)
-  const tz = input.displayTimeZone || 'UTC'
+  const tz = input.displayTimeZone || 'Europe/Istanbul'
   const genLocal = DateTime.now().setZone(tz)
-  const genUtc = DateTime.utc()
-  const generatedAtFooter =
-    genLocal.isValid && genUtc.isValid
-      ? `${genLocal.toFormat('dd.MM.yyyy HH:mm')} (${tz}) · ${genUtc.toFormat('yyyy-MM-dd HH:mm:ss')} UTC`
-      : `${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`
+  const reportDateShort = genLocal.isValid ? genLocal.toFormat('dd.MM.yyyy') : '—'
+  const generatedAtFooter = genLocal.isValid
+    ? `${genLocal.toFormat('dd.MM.yyyy HH:mm')}`
+    : new Date().toLocaleString('tr-TR')
 
+  /** LLM `affected_products` doluysa rapor listesine yalnızca onu al; aksi halde NVD CPE yedek */
   const productSet = new Set<string>()
   for (const item of input.vulnerabilities) {
-    const cve = item.cve as Record<string, unknown> | undefined
-    for (const label of collectCpeLabelsFromCve(cve)) {
-      productSet.add(label)
+    for (const p of collectProductNamesForCve(item)) {
+      productSet.add(p)
     }
   }
   const productBullets = [...productSet].sort((a, b) => a.localeCompare(b, 'tr'))
 
+  const vulnerabilitiesOrdered = sortVulnerabilitiesByProductBullets(
+    input.vulnerabilities,
+    productBullets
+  )
+
+  const windowLineForPdf = input.windowSummary
+    ? stripTrailingIanaZoneFromSummary(input.windowSummary)
+    : `${input.pubStartDate} → ${input.pubEndDate}`
+
+  const kapakDataUrl = loadKapakCoverDataUrl()
+
+  const coverDateLines: Content[] = [
+    {
+      text: 'RAPOR TARİHİ',
+      style: 'coverKapakDateLabel',
+      alignment: 'center',
+      margin: [0, 0, 0, 5],
+    },
+    {
+      text: reportDateShort,
+      style: 'coverKapakDateBig',
+      alignment: 'center',
+      margin: [0, 0, 0, 0],
+    },
+  ]
+
+  /** Mutlak tarih üstte kalsın diye önce akış yüksekliği, sonra tarih (pdfmake çizim sırası). */
+  const coverStack: Content[] = [
+    {
+      text: '\u200b',
+      fontSize: 1,
+      color: '#ffffff',
+      margin: [0, 0, 0, Math.max(0, COVER_A4_H_PT - 140)],
+    },
+    {
+      absolutePosition: { x: COVER_KAPAK_DATE_LEFT_PT, y: COVER_KAPAK_DATE_TOP_PT },
+      columns: [{ width: COVER_KAPAK_DATE_BOX_W_PT, stack: coverDateLines }],
+    },
+  ]
+
+
   const content: Content[] = [
     {
-      table: {
-        widths: ['*'],
-        body: [
-          [
-            {
-              stack: [
-                {
-                  text: 'Siber Güvenlik 0-day Zafiyet Bildirimi',
-                  style: 'coverTitle',
-                  color: '#ffffff',
-                  alignment: 'center',
-                },
-                {
-                  text: 'Raporu',
-                  style: 'coverSubtitle',
-                  color: '#e8e8f0',
-                  alignment: 'center',
-                  margin: [0, 6, 0, 0],
-                },
-                {
-                  text: `Rapor tarihi (UTC): ${reportDateStr}`,
-                  style: 'coverSub',
-                  color: '#d0d0e0',
-                  alignment: 'center',
-                  margin: [0, 14, 0, 0],
-                },
-              ],
-              fillColor: '#1e1b36',
-              margin: [20, 36, 20, 36],
-            },
-          ],
-        ],
-      },
-      layout: 'noBorders',
+      stack: coverStack,
+      pageBreak: 'after',
     },
-    { text: '', pageBreak: 'after' as const },
     { text: 'Yönetici Özeti', style: 'h2', margin: [0, 0, 0, 8] },
     {
       text:
@@ -354,28 +532,52 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
       margin: [0, 0, 0, 10],
     },
     {
-      columns: [
-        {
-          width: '*',
-          stack: [
-            { text: 'Yayın penceresi', style: 'metaLabel' },
+      table: {
+        widths: ['*', '*'],
+        body: [
+          [
             {
-              text: input.windowSummary
-                ? `${input.windowSummary}\nUTC (NVD aralığı): ${input.pubStartDate} → ${input.pubEndDate}`
-                : `${input.pubStartDate} → ${input.pubEndDate}`,
-              style: 'metaValue',
-              margin: [0, 2, 0, 0],
+              text: 'Yayın Aralığı',
+              style: 'metaLabel',
+              fillColor: '#eef1f6',
+              margin: [2, 2, 2, 2],
+            },
+            {
+              text: 'Toplam kayıt',
+              style: 'metaLabel',
+              alignment: 'left',
+              fillColor: '#eef1f6',
+              margin: [2, 2, 2, 2],
             },
           ],
-        },
-        {
-          width: '*',
-          stack: [
-            { text: 'Toplam kayıt (NVD)', style: 'metaLabel' },
-            { text: String(input.totalResults), style: 'metaValue', margin: [0, 2, 0, 0] },
+          [
+            {
+              text: windowLineForPdf,
+              style: 'metaValue',
+              bold: true,
+              margin: [2, 6, 2, 4],
+              alignment: 'left',
+            },
+            {
+              text: String(input.totalResults),
+              style: 'metaValue',
+              bold: true,
+              margin: [2, 6, 2, 4],
+              alignment: 'left',
+            },
           ],
-        },
-      ],
+        ],
+      },
+      layout: {
+        hLineWidth: () => 0.55,
+        vLineWidth: () => 0.55,
+        hLineColor: () => '#c8ced9',
+        vLineColor: () => '#c8ced9',
+        paddingLeft: () => 8,
+        paddingRight: () => 8,
+        paddingTop: () => 6,
+        paddingBottom: () => 6,
+      },
       margin: [0, 0, 0, 16],
     },
     { text: 'Zafiyet Barındıran Ürünler', style: 'h2', margin: [0, 0, 0, 8] },
@@ -393,9 +595,54 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
       margin: [0, 0, 0, 14],
     })
   } else {
+    const productCveBody: TableCell[][] = productBullets.map((label, idx) => {
+      const cveIds = collectCveIdsForProductLabel(input.vulnerabilities, label)
+      const cvePart = cveIds.length ? cveIds.join(', ') : '—'
+      return [
+        {
+          text: label,
+          style: 'pdfProductListLink',
+          linkToDestination: pdfProductAnchorId(idx),
+          border: [true, true, true, true],
+        },
+        {
+          text: cvePart,
+          style: 'productCveTableCveCell',
+          border: [true, true, true, true],
+        },
+      ]
+    })
     content.push({
-      ul: productBullets,
-      fontSize: 10,
+      table: {
+        widths: [168, '*'],
+        headerRows: 1,
+        dontBreakRows: false,
+        body: [
+          [
+            {
+              text: 'Ürün veya bileşen',
+              style: 'productCveTableHead',
+              border: [true, true, true, true],
+            },
+            {
+              text: 'İlgili CVE kimlikleri',
+              style: 'productCveTableHead',
+              border: [true, true, true, true],
+            },
+          ],
+          ...productCveBody,
+        ],
+      },
+      layout: {
+        hLineWidth: () => 0.55,
+        vLineWidth: () => 0.55,
+        hLineColor: () => '#c8ced9',
+        vLineColor: () => '#c8ced9',
+        paddingLeft: () => 8,
+        paddingRight: () => 8,
+        paddingTop: (i) => (i === 0 ? 7 : 6),
+        paddingBottom: (i) => (i === 0 ? 7 : 6),
+      },
       margin: [0, 0, 0, 14],
     })
   }
@@ -403,11 +650,11 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
   content.push({
     text: 'Zafiyet Detayları',
     style: 'h2',
-    pageBreak: input.vulnerabilities.length > 0 ? 'before' : undefined,
+    pageBreak: vulnerabilitiesOrdered.length > 0 ? 'before' : undefined,
     margin: [0, 4, 0, 10],
   })
 
-  if (input.vulnerabilities.length === 0) {
+  if (vulnerabilitiesOrdered.length === 0) {
     content.push({
       table: {
         widths: ['*'],
@@ -431,8 +678,22 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
       },
     })
   } else {
-    input.vulnerabilities.forEach((item, i) => {
-      content.push(buildCveDetailTable(item, i > 0, tz))
+    const firstCveIndexForProduct = new Map<number, number>()
+    vulnerabilitiesOrdered.forEach((item, i) => {
+      const nameLc = new Set(collectProductNamesForCve(item).map((n) => n.trim().toLowerCase()))
+      productBullets.forEach((p, j) => {
+        if (firstCveIndexForProduct.has(j)) return
+        if (nameLc.has(p.trim().toLowerCase())) {
+          firstCveIndexForProduct.set(j, i)
+        }
+      })
+    })
+
+    vulnerabilitiesOrdered.forEach((item, i) => {
+      const pdfAnchorIds = [...firstCveIndexForProduct.entries()]
+        .filter(([, firstIdx]) => firstIdx === i)
+        .map(([j]) => pdfProductAnchorId(j))
+      content.push(buildCveDetailTable(item, i > 0, tz, { pdfAnchorIds }))
     })
   }
 
@@ -448,39 +709,109 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
     pageSize: 'A4',
     pageMargins: [42, 52, 42, 60],
     defaultStyle: { font: 'Roboto', fontSize: 10, color: '#1a1a1a' },
+    ...(kapakDataUrl ? { images: { kapakCover: kapakDataUrl } } : {}),
+    background: (currentPage, pageSize) => {
+      const w = pageSize.width
+      const h = pageSize.height
+      if (currentPage === 1) {
+        if (kapakDataUrl) {
+          return [
+            {
+              image: 'kapakCover',
+              width: w,
+              height: h,
+              absolutePosition: { x: 0, y: 0 },
+            },
+          ] as Content[]
+        }
+        return [
+          {
+            canvas: [{ type: 'rect', x: 0, y: 0, w, h, color: '#0a1a30' }],
+            absolutePosition: { x: 0, y: 0 },
+          },
+        ] as Content[]
+      }
+      return [
+        {
+          canvas: [{ type: 'rect', x: 0, y: 0, w, h, color: '#ffffff' }],
+          absolutePosition: { x: 0, y: 0 },
+        },
+      ] as Content[]
+    },
     info: {
-      title: `Siber Güvenlik 0-day Zafiyet Bildirimi — ${reportDateStr}`,
+      title: `Siber Güvenlik Raporu — ${reportDateShort}`,
       author: 'CVE Modülü / NVD',
       subject: 'Günlük NVD özeti',
     },
     content,
+    header: (currentPage: number, _pageCount: number) => {
+      if (currentPage === 1) {
+        return { text: '', margin: [0, 0, 0, 0] }
+      }
+      return {
+        margin: [42, 6, 42, 0],
+        columns: [
+          { width: '*', text: '' },
+          {
+            width: 'auto',
+            text: 'Genel | Kişisel Veri İçermez',
+            fontSize: 7.5,
+            color: '#666666',
+            alignment: 'right',
+            bold: true,
+          },
+        ],
+      }
+    },
     styles: {
-      coverTitle: { fontSize: 20, bold: true },
-      coverSubtitle: { fontSize: 14, bold: true },
-      coverSub: { fontSize: 11 },
+      coverKapakDateLabel: {
+        fontSize: 12,
+        bold: true,
+        characterSpacing: 1.5,
+        color: '#ffffff',
+      },
+      coverKapakDateBig: { fontSize: 17, bold: true, color: '#ffffff' },
       h2: { fontSize: 13, bold: true, color: '#1e1b36' },
+      pdfProductListLink: {
+        fontSize: 10,
+        color: '#1a5275',
+        decoration: 'underline',
+        decorationColor: '#1a5275',
+      },
+      productCveTableHead: {
+        fontSize: 9,
+        bold: true,
+        color: '#4b5563',
+        fillColor: '#eef1f6',
+      },
+      productCveTableCveCell: { fontSize: 10, color: '#1a1a1a' },
       metaLabel: { fontSize: 8, bold: true, color: '#666666' },
       metaValue: { fontSize: 10 },
       cveTableTitle: { fontSize: 13, bold: true },
       detailLabel: { bold: true, fontSize: 9.5 },
       detailValue: { fontSize: 10 },
     },
-    footer: (currentPage: number, pageCount: number) => ({
-      margin: [42, 10, 42, 0],
-      columns: [
-        {
-          text: `Oluşturulma: ${generatedAtFooter}`,
-          fontSize: 7,
-          color: '#888888',
-        },
-        {
-          text: `Sayfa ${currentPage} / ${pageCount}`,
-          alignment: 'right',
-          fontSize: 7,
-          color: '#888888',
-        },
-      ],
-    }),
+    footer: (currentPage: number, pageCount: number) => {
+      if (currentPage === 1) {
+        return { text: '', margin: [0, 0, 0, 0] }
+      }
+      return {
+        margin: [42, 10, 42, 0],
+        columns: [
+          {
+            text: `Türk Telekom : ${generatedAtFooter}`,
+            fontSize: 7,
+            color: '#888888',
+          },
+          {
+            text: `Sayfa ${currentPage} / ${pageCount}`,
+            alignment: 'right',
+            fontSize: 7,
+            color: '#888888',
+          },
+        ],
+      }
+    },
   }
 
   const pdf = pdfMake.createPdf(docDefinition)

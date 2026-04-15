@@ -38,8 +38,12 @@ interface NvdPayload {
   publicationRangeClamped: boolean
   timeZone?: string
   windowSummary?: string
-  /** Kayıt kontrolü için üst zaman (şimdi, UTC) */
+  /** NVD / DB sorgu üst sınırı (pencerenin son dahil anı, UTC ISO) */
   listQueryEndDate?: string
+  /** Pencere bitiş sınırı (exclusive), UTC ISO */
+  windowEndExclusiveUtcIso?: string
+  /** Yenile (liveEnd=1): bitiş = istek anı */
+  liveEndRefresh?: boolean
   /** Sunucu: bu sayfa listesindeki CVE’ler bu yayın penceresinde DB’de mi */
   listPersisted?: boolean
 }
@@ -53,11 +57,26 @@ const { t, locale } = useI18n()
 const { vulnStatus, severity: severityLabel } = useNvdLocale()
 const unauthorizedHandlers = useUnauthorizedRedirectHandlers()
 
-const { data: nvd, pending, error, refresh } = await useFetch<NvdApiResponse>(props.fetchPath, {
-  key: props.fetchKey,
+/** 0 = ilk yükleme (artımlı NVD birleşimi); artış = Yenile: başlangıç dün+cron saati, bitiş şu an */
+const manualRefreshGeneration = ref(0)
+
+const nvdRequestUrl = computed(() => {
+  const base = props.fetchPath
+  if (manualRefreshGeneration.value === 0) return base
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}liveEnd=1&_=${manualRefreshGeneration.value}`
+})
+
+const { data: nvd, pending, error, refresh } = await useFetch<NvdApiResponse>(nvdRequestUrl, {
+  key: computed(() => `${props.fetchKey}-${manualRefreshGeneration.value}`),
   $fetch: requestFetch,
   ...unauthorizedHandlers,
 })
+
+async function manualRefreshNvd() {
+  manualRefreshGeneration.value += 1
+  await refresh()
+}
 
 const vulnerabilities = computed(() => nvd.value?.data?.vulnerabilities ?? [])
 const meta = computed(() => nvd.value?.data)
@@ -68,7 +87,7 @@ const displayTimeZone = computed(
 )
 
 /**
- * `windowSummary` metnini (örn. `08.04.2026 09:00 → 09.04.2026 13:06 (Europe/Istanbul)`)
+ * `windowSummary` metnini (örn. cron 10:10: `13.04.2026 10:10 → 14.04.2026 10:10 (Europe/Istanbul)`; bitiş exclusive)
  * başlangıç / bitiş / TZ olarak ayırır; ayrışmazsa API’den gelen ham metin veya ISO fallback kullanılır.
  */
 const windowSummaryParts = computed(() => {
@@ -302,19 +321,46 @@ async function saveToDb() {
   saveMessage.value = ''
   saveError.value = ''
   try {
-    const res = await $fetch<{ message: string; data: { upserted: number; skippedInvalid: number } }>(
-      '/api/v2/cves/nvd',
-      {
-        method: 'POST',
-        body: { vulnerabilities: list },
+    const res = await $fetch<{
+      message: string
+      data: {
+        upserted: number
+        skippedInvalid: number
+        llm: {
+          reusedFromDb: number
+          newRowCount: number
+          newRowsSkippedLlm: number
+          llmQueueCount: number
+          openaiRequestCount: number
+          memoryCacheHits: number
+          llmDurationMs: number
+          hadOpenaiKey: boolean
+        }
       }
-    )
+    }>('/api/v2/cves/nvd', {
+      method: 'POST',
+      body: { vulnerabilities: list },
+    })
+    const llm = res.data.llm
+    const llmPart =
+      llm !== undefined
+        ? t('', {
+            reused: llm.reusedFromDb,
+            newRows: llm.newRowCount,
+            skipped: llm.newRowsSkippedLlm,
+            queued: llm.llmQueueCount,
+            api: llm.openaiRequestCount,
+            cached: llm.memoryCacheHits,
+            sec: (llm.llmDurationMs / 1000).toFixed(1),
+          })
+        : ''
     saveMessage.value = t('feed.saveResult', {
       message: res.message,
       upserted: res.data.upserted,
       skippedPart: res.data.skippedInvalid
         ? t('feed.saveSkippedPart', { n: res.data.skippedInvalid })
         : '',
+      llmPart,
     })
     await refresh()
   } catch (e: unknown) {
@@ -342,7 +388,7 @@ function severityClass(sev: string): string {
         <h1>{{ title }}</h1>
         <p class="lead">{{ lead }}</p>
       </div>
-      <button type="button" class="btn btn--ghost" :disabled="pending" @click="() => refresh()">
+      <button type="button" class="btn btn--ghost" :disabled="pending" @click="manualRefreshNvd">
         {{ pending ? t('feed.loading') : t('feed.refresh') }}
       </button>
     </div>

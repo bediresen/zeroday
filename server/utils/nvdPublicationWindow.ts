@@ -6,20 +6,23 @@ import { getCveModel } from './db'
 export type NvdPublicationWindow = {
   pubStartDate: string
   pubEndDate: string
+  /** Yerel TZ’de üst sınır anı (exclusive): `pubEndDate` bu andan 1 ms öncesine kadar */
+  windowEndExclusiveUtcIso: string
   /** DB’de gösterim için (pencere hesabında kullanılmaz) */
   newestPublishedAt: Date | null
   /** Eski API uyumluluğu; her zaman false */
   publicationRangeClamped: boolean
   timeZone: string
-  /** Örn. Europe/Istanbul’da okunaklı aralık */
+  /** Örn. dün 10:10 → bugün 10:10 (bitiş exclusive); ayarlardaki saat/dakika */
   windowSummary: string
 }
 
 /**
- * Dün [saat]:[dakika] → bugün [saat]:[dakika] (aynı TZ’de son tamamlanan 24 saatlik dilim).
- * Siteye giriş anı veya DB’deki en yeni yayın pencereyi belirlemez.
+ * NVD yayın penceresi: yerel takvimde **dün** ve **bugün**, ayarlardaki aynı saat/dakikada.
+ * [dün @ HH:mm, bugün @ HH:mm) — üst sınır exclusive (`pubEndDate` bir ms öncesine kadar).
+ * Böylece sınır saatinden önce sayfa açılsa bile tarihler bir gün geride kalmaz (her zaman dün→bugün).
  */
-export function computeBoundaryWindow(opts: {
+export function computeScheduledBoundaryPublicationWindow(opts: {
   timeZone: string
   hour: number
   minute: number
@@ -29,36 +32,44 @@ export function computeBoundaryWindow(opts: {
   windowEnd: DateTime
   pubStartDate: string
   pubEndDate: string
+  windowEndExclusiveUtcIso: string
+  windowSummary: string
 } {
   const { timeZone, hour, minute, now } = opts
+  const h = Math.min(23, Math.max(0, Math.floor(hour)))
+  const mi = Math.min(59, Math.max(0, Math.floor(minute)))
   const dt = DateTime.fromJSDate(now).setZone(timeZone)
-  const todayBoundary = dt.startOf('day').set({ hour, minute, second: 0, millisecond: 0 })
-
-  let windowEnd: DateTime
-  let windowStart: DateTime
-  if (dt >= todayBoundary) {
-    windowEnd = todayBoundary
-    windowStart = todayBoundary.minus({ days: 1 })
-  } else {
-    windowEnd = todayBoundary.minus({ days: 1 })
-    windowStart = todayBoundary.minus({ days: 2 })
-  }
+  const windowEnd = dt.startOf('day').set({ hour: h, minute: mi, second: 0, millisecond: 0 })
+  const windowStart = windowEnd.minus({ days: 1 })
 
   const pubStartDate = windowStart.toUTC().toISO()!
   const pubEndDate = windowEnd.minus({ milliseconds: 1 }).toUTC().toISO()!
+  const windowEndExclusiveUtcIso = windowEnd.toUTC().toISO()!
 
-  return { windowStart, windowEnd, pubStartDate, pubEndDate }
+  const startLabel = windowStart.setZone(timeZone).toFormat('dd.MM.yyyy HH:mm')
+  const endLabel = windowEnd.setZone(timeZone).toFormat('dd.MM.yyyy HH:mm')
+  const windowSummary = `${startLabel} → ${endLabel} (${timeZone})`
+
+  return {
+    windowStart,
+    windowEnd,
+    pubStartDate,
+    pubEndDate,
+    windowEndExclusiveUtcIso,
+    windowSummary,
+  }
 }
 
 export async function resolveNvdPublicationWindow(now: Date = new Date()): Promise<NvdPublicationWindow> {
   await ensureCveSchema()
   const cron = await getCronSettingsResolved()
-  const { windowStart, windowEnd, pubStartDate, pubEndDate } = computeBoundaryWindow({
-    timeZone: cron.timeZone,
-    hour: cron.hour,
-    minute: cron.minute,
-    now,
-  })
+  const { pubStartDate, pubEndDate, windowSummary, windowEndExclusiveUtcIso } =
+    computeScheduledBoundaryPublicationWindow({
+      timeZone: cron.timeZone,
+      hour: cron.hour,
+      minute: cron.minute,
+      now,
+    })
 
   const Cve = getCveModel()!
   const newest = (await Cve.max('published_at')) as Date | string | null
@@ -66,31 +77,24 @@ export async function resolveNvdPublicationWindow(now: Date = new Date()): Promi
   const newestValid =
     newestPublishedAt && !Number.isNaN(newestPublishedAt.getTime()) ? newestPublishedAt : null
 
-  const tz = cron.timeZone
-  const startLocal = windowStart.setZone(tz)
-  const endInclusive = windowEnd.minus({ milliseconds: 1 }).setZone(tz)
-  const windowSummary = `${startLocal.toFormat('dd.MM.yyyy HH:mm')} → ${endInclusive.toFormat('dd.MM.yyyy HH:mm')} (${tz})`
-
   return {
     pubStartDate,
     pubEndDate,
+    windowEndExclusiveUtcIso,
     newestPublishedAt: newestValid,
     publicationRangeClamped: false,
-    timeZone: tz,
+    timeZone: cron.timeZone,
     windowSummary,
   }
 }
 
-
+/** Liste / e-posta üst bilgisi: `resolveNvdPublicationWindow` ile aynı pencere özeti */
 export async function getLiveFeedWindowSummary(): Promise<string> {
   const cron = await getCronSettingsResolved()
-  const { windowStart } = computeBoundaryWindow({
+  return computeScheduledBoundaryPublicationWindow({
     timeZone: cron.timeZone,
     hour: cron.hour,
     minute: cron.minute,
     now: new Date(),
-  })
-  const startLabel = windowStart.setZone(cron.timeZone).toFormat('dd.MM.yyyy HH:mm')
-  const nowLabel = DateTime.now().setZone(cron.timeZone).toFormat('dd.MM.yyyy HH:mm')
-  return `${startLabel} → ${nowLabel} (${cron.timeZone})`
+  }).windowSummary
 }

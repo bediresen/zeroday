@@ -20,10 +20,9 @@ export default defineEventHandler(async (event) => {
 
     const config = useRuntimeConfig()
     const result = await persistNvdVulnerabilities(list, {
-      azureTranslatorKey:
-        typeof config.azureTranslatorKey === 'string' ? config.azureTranslatorKey : undefined,
-      azureTranslatorRegion:
-        typeof config.azureTranslatorRegion === 'string' ? config.azureTranslatorRegion : undefined,
+      openaiApiKey: typeof config.openaiApiKey === 'string' ? config.openaiApiKey : undefined,
+      openaiModel: typeof config.openaiModel === 'string' ? config.openaiModel : undefined,
+      openaiBaseUrl: typeof config.openaiBaseUrl === 'string' ? config.openaiBaseUrl : undefined,
     })
 
     return {

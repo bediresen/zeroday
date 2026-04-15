@@ -4,53 +4,88 @@ import {
   attachDescriptionTrFromDb,
   fetchNvdCvesByPubRange,
   fetchNvdIncrementalSlice,
-  loadVulnerabilitiesFromDbPublishedAfterWindowEnd,
   mergeVulnerabilitiesDedupe,
 } from '../../../utils/nvdCve.helper'
-import { getLiveFeedWindowSummary, resolveNvdPublicationWindow } from '../../../utils/nvdPublicationWindow'
+import {
+  computeScheduledBoundaryPublicationWindow,
+  resolveNvdPublicationWindow,
+} from '../../../utils/nvdPublicationWindow'
+import { getCronSettingsResolved } from '../../../utils/cveSettings'
 
-export default defineEventHandler(async () => {
+function parseLiveEndFlag(raw: Record<string, unknown>): boolean {
+  const le = raw.liveEnd
+  return (
+    le === '1' ||
+    le === 'true' ||
+    le === 1 ||
+    (Array.isArray(le) && (le[0] === '1' || le[0] === 'true'))
+  )
+}
+
+export default defineEventHandler(async (event) => {
   try {
-    const window = await resolveNvdPublicationWindow()
+    const liveEnd = parseLiveEndFlag(getQuery(event) as Record<string, unknown>)
+    const requestNow = new Date()
+
+    const window = await resolveNvdPublicationWindow(requestNow)
     const { nvdApiKey } = useRuntimeConfig()
-    const fetched = await fetchNvdCvesByPubRange(window.pubStartDate, window.pubEndDate, {
+
+    let pubStartDate = window.pubStartDate
+    let pubEndDate = window.pubEndDate
+    let windowSummary = window.windowSummary
+    let windowEndExclusiveUtcIso = window.windowEndExclusiveUtcIso
+
+    if (liveEnd) {
+      const cronCfg = await getCronSettingsResolved()
+      const comp = computeScheduledBoundaryPublicationWindow({
+        timeZone: cronCfg.timeZone,
+        hour: cronCfg.hour,
+        minute: cronCfg.minute,
+        now: requestNow,
+      })
+      pubStartDate = comp.pubStartDate
+      pubEndDate = DateTime.fromJSDate(requestNow, { zone: 'utc' }).toISO()!
+      const startLabel = comp.windowStart.setZone(cronCfg.timeZone).toFormat('dd.MM.yyyy HH:mm')
+      const endLabel = DateTime.fromJSDate(requestNow).setZone(cronCfg.timeZone).toFormat('dd.MM.yyyy HH:mm')
+      windowSummary = `${startLabel} → ${endLabel} (${cronCfg.timeZone})`
+      windowEndExclusiveUtcIso = pubEndDate
+    }
+
+    const fetched = await fetchNvdCvesByPubRange(pubStartDate, pubEndDate, {
       apiKey: nvdApiKey || undefined,
     })
-
-    const nowUtc = new Date()
-    const nowIsoUtc = DateTime.fromJSDate(nowUtc, { zone: 'utc' }).toISO()!
 
     let vulnerabilities = await attachDescriptionTrFromDb(fetched.vulnerabilities)
-    const extraFromDb = await loadVulnerabilitiesFromDbPublishedAfterWindowEnd(
-      window.pubEndDate,
-      nowUtc
-    )
-    vulnerabilities = mergeVulnerabilitiesDedupe(vulnerabilities, extraFromDb)
 
-    const inc = await fetchNvdIncrementalSlice(window.pubStartDate, {
-      apiKey: nvdApiKey || undefined,
-    })
-    vulnerabilities = mergeVulnerabilitiesDedupe(vulnerabilities, inc.vulnerabilities)
+    if (!liveEnd) {
+      const inc = await fetchNvdIncrementalSlice(window.pubStartDate, {
+        apiKey: nvdApiKey || undefined,
+        pubEndDateCapIso: window.pubEndDate,
+      })
+      vulnerabilities = mergeVulnerabilitiesDedupe(vulnerabilities, inc.vulnerabilities)
+    }
 
     const listPersisted = await areListCvesPersistedInWindow(
       vulnerabilities,
-      window.pubStartDate,
-      nowIsoUtc
+      pubStartDate,
+      pubEndDate
     )
-
-    const windowSummary = await getLiveFeedWindowSummary()
 
     return {
       data: {
         ...fetched,
+        pubStartDate,
+        pubEndDate,
         totalResults: vulnerabilities.length,
         vulnerabilities,
         dbNewestPublishedAt: window.newestPublishedAt,
         publicationRangeClamped: window.publicationRangeClamped,
         timeZone: window.timeZone,
         windowSummary,
-        listQueryEndDate: nowIsoUtc,
+        listQueryEndDate: pubEndDate,
+        windowEndExclusiveUtcIso,
         listPersisted,
+        liveEndRefresh: liveEnd,
       },
     }
   } catch (error: unknown) {

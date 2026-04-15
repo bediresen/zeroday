@@ -1,4 +1,4 @@
-import { translateEnToTr } from '../../utils/translateText'
+import { translateCveStructuredEnToTr, type CveStructuredTranslation } from '../../utils/translateText'
 
 const MAX_BODY_CHARS = 120_000
 const MAX_TOTAL_CHARS = 400_000
@@ -8,15 +8,18 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{
     text?: string
     texts?: string[]
+    cveId?: string
+    cveIds?: string[]
     to?: string
   }>(event)
   const to = body?.to ?? 'tr'
 
   if (Array.isArray(body?.texts)) {
-    return handleBatch(body.texts, to)
+    return handleBatch(body.texts, body?.cveIds, to)
   }
 
   const text = typeof body?.text === 'string' ? body.text : ''
+  const cveId = typeof body?.cveId === 'string' ? body.cveId.trim() : undefined
 
   if (to !== 'tr') {
     return { translated: text, degraded: false }
@@ -29,21 +32,41 @@ export default defineEventHandler(async (event) => {
   }
 
   if (!text.trim() || text.trim() === '—') {
-    return { translated: text, degraded: false }
+    const empty: CveStructuredTranslation = {
+      cveId: cveId ?? 'UNKNOWN',
+      descriptionTr: text,
+      affectedProducts: [],
+    }
+    return { ...empty, translated: text, degraded: false }
   }
 
   const config = useRuntimeConfig()
-  const translated = await translateEnToTr(text, {
-    azureTranslatorKey:
-      typeof config.azureTranslatorKey === 'string' ? config.azureTranslatorKey : undefined,
-    azureTranslatorRegion:
-      typeof config.azureTranslatorRegion === 'string' ? config.azureTranslatorRegion : undefined,
-  })
-  const degraded = translated.trim() === text.trim()
-  return { translated, degraded }
+  const llmCfg = {
+    openaiApiKey: typeof config.openaiApiKey === 'string' ? config.openaiApiKey : undefined,
+    openaiModel: typeof config.openaiModel === 'string' ? config.openaiModel : undefined,
+    openaiBaseUrl: typeof config.openaiBaseUrl === 'string' ? config.openaiBaseUrl : undefined,
+  }
+
+  const structured = await translateCveStructuredEnToTr(cveId ?? 'UNKNOWN', text, llmCfg)
+  if (structured) {
+    const degraded = structured.descriptionTr.trim() === text.trim()
+    return {
+      cveId: structured.cveId,
+      translated: structured.descriptionTr,
+      affectedProducts: structured.affectedProducts,
+      degraded,
+    }
+  }
+
+  return {
+    cveId: cveId ?? 'UNKNOWN',
+    translated: text,
+    affectedProducts: [] as string[],
+    degraded: true,
+  }
 })
 
-async function handleBatch(texts: string[], to: string) {
+async function handleBatch(texts: string[], cveIds: string[] | undefined, to: string) {
   if (to !== 'tr') {
     return { translations: texts, degraded: false }
   }
@@ -62,22 +85,39 @@ async function handleBatch(texts: string[], to: string) {
     throw createError({ statusCode: 413, statusMessage: 'Toplam metin çok uzun' })
   }
 
-  const config = useRuntimeConfig()
-  const azureCfg = {
-    azureTranslatorKey:
-      typeof config.azureTranslatorKey === 'string' ? config.azureTranslatorKey : undefined,
-    azureTranslatorRegion:
-      typeof config.azureTranslatorRegion === 'string' ? config.azureTranslatorRegion : undefined,
+  if (cveIds !== undefined && cveIds.length !== texts.length) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'cveIds varsa texts ile aynı uzunlukta olmalı',
+    })
   }
 
-  const translations: string[] = []
-  for (const text of texts) {
+  const config = useRuntimeConfig()
+  const llmCfg = {
+    openaiApiKey: typeof config.openaiApiKey === 'string' ? config.openaiApiKey : undefined,
+    openaiModel: typeof config.openaiModel === 'string' ? config.openaiModel : undefined,
+    openaiBaseUrl: typeof config.openaiBaseUrl === 'string' ? config.openaiBaseUrl : undefined,
+  }
+
+  const results: CveStructuredTranslation[] = []
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i]!
+    const id = (cveIds?.[i] ?? 'UNKNOWN').trim() || 'UNKNOWN'
     if (!text.trim() || text.trim() === '—') {
-      translations.push(text)
+      results.push({ cveId: id, descriptionTr: text, affectedProducts: [] })
       continue
     }
-    translations.push(await translateEnToTr(text, azureCfg))
+    const s = await translateCveStructuredEnToTr(id, text, llmCfg)
+    if (s) {
+      results.push(s)
+    } else {
+      results.push({ cveId: id, descriptionTr: text, affectedProducts: [] })
+    }
   }
 
-  return { translations, degraded: false }
+  return {
+    translations: results.map((r) => r.descriptionTr),
+    structured: results,
+    degraded: false,
+  }
 }

@@ -1,5 +1,9 @@
+import { DateTime } from 'luxon'
 import { getEmailSettingsResolved, getSmtpSettingsResolved } from '../../../../utils/cveSettings'
-import { compileCveReportEmailHtml } from '../../../../utils/cveReportMjml'
+import {
+  buildCveReportEmailInlineImageAttachments,
+  compileCveReportEmailHtml,
+} from '../../../../utils/cveReportMjml'
 import { logReportEmailAttempt } from '../../../../utils/emailSendLog'
 import {
   buildMinioReportObjectKey,
@@ -23,7 +27,7 @@ export default defineEventHandler(async () => {
     await logReportEmailAttempt({
       status: 'failed',
       recipients: '—',
-      subject: 'CVE günlük raporu',
+      subject: 'ZERODAY CVE bülteni',
       errorMessage: 'Ayarlar > E-posta ayarları bölümünde en az bir alıcı e-posta girin.',
       errorCode: 'VALIDATION',
     })
@@ -39,7 +43,7 @@ export default defineEventHandler(async () => {
     await logReportEmailAttempt({
       status: 'failed',
       recipients: to,
-      subject: 'CVE günlük raporu',
+      subject: 'ZERODAY CVE bülteni',
       errorMessage: 'SMTP sunucu adresi ve gönderen (From) ayarlarını doldurun.',
       errorCode: 'SMTP_CONFIG',
     })
@@ -86,7 +90,9 @@ export default defineEventHandler(async () => {
           })
 
     const year = new Date().getFullYear()
+    const bulletinDateLabel = DateTime.now().setZone(pubWindow.timeZone).toFormat('dd.MM.yyyy')
     const html = compileCveReportEmailHtml({
+      bulletinDateLabel,
       windowSummary: pubWindow.windowSummary,
       total: vulnerabilities.length,
       vulnerabilities,
@@ -94,7 +100,7 @@ export default defineEventHandler(async () => {
     })
 
     const fname = filenameAscii
-    logSubject = `CVE günlük raporu (${day}.${mo}.${y})`
+    logSubject = `ZERODAY CVE bülteni (${bulletinDateLabel})`
 
     const mail = new MailHelper({
       host: smtp.host.trim(),
@@ -119,6 +125,7 @@ export default defineEventHandler(async () => {
           subject: logSubject,
           html,
           attachments: [
+            ...buildCveReportEmailInlineImageAttachments(),
             {
               filename: fname,
               content: buffer,

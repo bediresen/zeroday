@@ -1,17 +1,17 @@
 /**
  * Zamanlanmış görevlerde `useRuntimeConfig()` event olmadan Nitro’da çalışır;
- * POST /api/v2/cves/nvd ile aynı Azure ve NVD anahtarı kaynağını kullanır.
+ * POST /api/v2/cves/nvd ile aynı OpenAI ve NVD anahtarı kaynağını kullanır.
  */
-export function getAzureTranslatorOptionsForPersist(): {
-  azureTranslatorKey?: string
-  azureTranslatorRegion?: string
+export function getOpenAiTranslateOptionsForPersist(): {
+  openaiApiKey?: string
+  openaiModel?: string
+  openaiBaseUrl?: string
 } {
   const config = useRuntimeConfig()
   return {
-    azureTranslatorKey:
-      typeof config.azureTranslatorKey === 'string' ? config.azureTranslatorKey : undefined,
-    azureTranslatorRegion:
-      typeof config.azureTranslatorRegion === 'string' ? config.azureTranslatorRegion : undefined,
+    openaiApiKey: typeof config.openaiApiKey === 'string' ? config.openaiApiKey : undefined,
+    openaiModel: typeof config.openaiModel === 'string' ? config.openaiModel : undefined,
+    openaiBaseUrl: typeof config.openaiBaseUrl === 'string' ? config.openaiBaseUrl : undefined,
   }
 }
 
