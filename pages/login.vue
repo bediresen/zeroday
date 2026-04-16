@@ -2,20 +2,53 @@
 const { t } = useI18n()
 const config = useRuntimeConfig()
 
+const showRegister = computed(() => Boolean(config.public.authAllowRegister))
+
 const mode = ref<'login' | 'register'>('login')
 const username = ref('')
 const password = ref('')
 const busy = ref(false)
 const errMsg = ref('')
+const successMsg = ref('')
 
-const showRegister = computed(() => Boolean(config.public.authAllowRegister))
+function readApiErrorMessage(err: unknown, fallback: string): string {
+  const e = err as {
+    data?: unknown
+    message?: string
+    statusMessage?: string
+  }
+  const d = e?.data as Record<string, unknown> | undefined
+  if (d && typeof d === 'object') {
+    if (typeof d.message === 'string' && d.message.trim()) return d.message.trim()
+    const inner = d.data as Record<string, unknown> | undefined
+    if (
+      inner &&
+      typeof inner === 'object' &&
+      typeof inner.message === 'string' &&
+      inner.message.trim()
+    ) {
+      return inner.message.trim()
+    }
+  }
+  const msg = e?.message
+  if (typeof msg === 'string' && msg.trim() && !/^\[\d+\]/.test(msg)) return msg.trim()
+  if (typeof e?.statusMessage === 'string' && e.statusMessage.trim()) return e.statusMessage.trim()
+  return fallback
+}
+
+function readApiStatusCode(err: unknown): number | undefined {
+  const e = err as { statusCode?: number; status?: number }
+  return e?.statusCode ?? e?.status
+}
 
 watch(mode, () => {
   errMsg.value = ''
+  successMsg.value = ''
 })
 
 async function submit() {
   errMsg.value = ''
+  successMsg.value = ''
   const u = username.value.trim()
   const p = password.value
   if (!u || !p) {
@@ -29,17 +62,27 @@ async function submit() {
         method: 'POST',
         body: { username: u, password: p },
       })
+      password.value = ''
+      mode.value = 'login'
+      successMsg.value = t('login.registerSuccess')
+      await refreshNuxtData('auth-me')
     } else {
       await $fetch('/api/auth/login', {
         method: 'POST',
         body: { username: u, password: p },
       })
+      busy.value = false
+      void refreshNuxtData('auth-me')
+      await navigateTo('/')
     }
-    await refreshNuxtData('auth-me')
-    await navigateTo('/')
   } catch (e: unknown) {
-    const ex = e as { data?: { message?: string }; message?: string }
-    errMsg.value = ex?.data?.message || ex?.message || t('login.errorGeneric')
+    const code = readApiStatusCode(e)
+    const apiMsg = readApiErrorMessage(e, '')
+    if (code === 401 && mode.value === 'login') {
+      errMsg.value = apiMsg || t('login.wrongCredentials')
+    } else {
+      errMsg.value = apiMsg || t('login.errorGeneric')
+    }
   } finally {
     busy.value = false
   }
@@ -97,6 +140,7 @@ async function submit() {
             class="field-input"
           />
         </label>
+        <p v-if="successMsg" class="banner banner--ok">{{ successMsg }}</p>
         <p v-if="errMsg" class="banner banner--err">{{ errMsg }}</p>
         <button type="submit" class="btn btn--primary btn--block" :disabled="busy">
           {{
@@ -232,6 +276,12 @@ async function submit() {
   color: var(--app-error-text);
   background: var(--app-error-bg);
   border: 1px solid var(--app-error-border);
+}
+
+.banner--ok {
+  color: #0d5c2f;
+  background: #ecfdf3;
+  border: 1px solid #86efac;
 }
 
 .btn {

@@ -19,6 +19,8 @@
     "working": "İşleniyor…",
     "fillAll": "Kullanıcı adı ve şifre girin.",
     "errorGeneric": "İşlem başarısız.",
+    "wrongCredentials": "Kullanıcı adı veya şifre yanlış.",
+    "registerSuccess": "Kayıt tamamlandı. Şimdi giriş yapabilirsiniz.",
     "registerClosed": "Yeni kullanıcı kaydı kapalı. Mevcut hesabınızla giriş yapın."
   },
   "emailLogs": {
@@ -40,20 +42,26 @@
   "pages": {
     "home": {
       "title": "Bugünün CVE'leri",
-      "lead": "Son tamamlanan günlük penceredeki NVD kayıtları (ayarlardaki saat dilimi ve saate göre: önceki gün aynı saat → bugün aynı saat). Kaydet ile DB’ye yazılır; Türkçe açıklama kayıtta üretilir. Rapor oluştur aynı penceredeki DB kayıtlarından PDF üretir."
+      "lead": "İlk açılışta veritabanındaki en son 100 CVE hızlı listelenir. Tam günlük pencere ve NVD ile eşitlemek için «Güncel CVE'leri çek» kullanın. Kaydet ile DB’ye yazılır; Türkçe açıklama kayıtta üretilir. Rapor oluştur aynı penceredeki DB kayıtlarından PDF üretir."
     }
   },
   "feed": {
+    "fetchCurrentCves": "Güncel CVE'leri çek",
+    "quickDashboardHint": "İlk açılışta veritabanındaki en son {n} CVE gösterilir. Kaydet, rapor ve e-posta için önce «Güncel CVE'leri çek» ile güncel CVE'leri çekin.",
+    "totalDbPeek": "Kayıtlar (veritabanı)",
+    "actionNeedsFullFetch": "Önce «Güncel CVE'leri çek» ile güncel NVD penceresini yükleyin.",
     "refresh": "Yenile",
     "loading": "Yükleniyor…",
     "loadingData": "Veri yükleniyor…",
+    "pageLoading": "CVE listesi hazırlanıyor, lütfen bekleyin…",
+    "tableRefreshing": "Liste yenileniyor…",
     "pubWindowUtc": "Yayın penceresi (UTC)",
-    "pubWindow": "Yayın penceresi",
-    "windowCardHint": "Varsayılan: dün + ayar saati → bugün aynı saat (üst sınır NVD’de hariç). Yenile: başlangıç aynı kalır, bitiş o anki tarih/saat olur.",
+    "pubWindow": "Yapılan Sorgu Aralığı",
+    "windowCardHint": "Tabloda gösterilen CVE kayıtlarının yayın zaman aralığı.",
     "windowFrom": "Başlangıç",
     "windowTo": "Bitiş",
     "dbNewestHint": "Veritabanında kayıtlı CVE’ler arasında en geç yayın zamanı.",
-    "totalNvd": "Toplam (NVD)",
+    "totalNvd": "Toplam CVE",
     "totalNvdNote": "NVD’nin bildirdiği toplam ({nvd}) ile bu sayfadaki liste ({list}) farklı; genelde sayfalama veya anlık yanıt farkıdır. Yenile deneyin.",
     "windowTimeHint": "Cron tam ayarladığınız saatte çalışırken siz sayfayı başka bir saatte açtıysanız, “son tamamlanan 24 saat” penceresi farklı günleri kapsayabilir; NVD’deki kayıt sayısı ve DB’ye yazılan satır sayısı bu yüzden değişebilir. Sayıyı karşılaştırmak için Yenile ile aynı anı yakalayın veya pencere satırına bakın.",
     "dbNewestPub": "DB’deki en yeni yayın",
@@ -73,7 +81,7 @@
     "nothingToSave": "Kaydedilecek kayıt yok.",
     "saveFailed": "Kayıt başarısız.",
     "saveResult": "{message} {upserted} kayıt yazıldı{skippedPart}{llmPart}",
-    "saveLlmPart": " — LLM: DB’den {reused} satır; yeni {newRows} (çeviri dışı {skipped}); kuyruk {queued}; OpenAI {api}; önbellek {cached}; süre {sec}s.",
+    "saveLlmPart": "",
     "saveSkippedPart": ", {n} atlandı",
     "downloadReport": "Rapor oluştur",
     "reportGenerating": "Rapor hazırlanıyor…",
@@ -128,7 +136,7 @@
     "smtpTitle": "E-posta (SMTP)",
     "cronTitle": "Günlük NVD senkronu",
     "cronHint": "Belirttiğiniz saat diliminde her gün (veya seçilen günlerde) çalışır; pencere bir önceki çalışma anından bu çalışma anına kadar olan 24 saattir (ör. dün 09:00–bugün 09:00).",
-    "cronEmailNote": "PDF raporunu e-postayla göndermek için ana sayfadaki «E-posta gönder» kullanılır; alıcılar E-posta ayarları sekmesindedir.",
+    "cronEmailNote": "Zamanlanmış görev NVD senkronundan sonra aynı pencere için PDF üretir, MinIO’ya yükler ve bülteni E-posta sekmesindeki alıcılara gönderir. SMTP ve alıcı eksikse e-posta atlanır; istediğiniz zaman ana sayfadaki «E-posta gönder» ile de tetikleyebilirsiniz.",
     "from": "Gönderen (From)",
     "fromPh": "Gönderen adı ve e-posta",
     "host": "SMTP sunucusu",

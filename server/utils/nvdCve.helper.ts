@@ -249,6 +249,25 @@ export async function loadVulnerabilitiesForPdfFromDb(
   return out
 }
 
+/** Ana sayfa hızlı açılış: `published_at`’e göre en yeni N satır (NVD çağrısı yok). */
+export async function loadLatestCvesFromDb(limit: number): Promise<NvdCveItemWithTr[]> {
+  await ensureCveSchema()
+  const n = Math.min(500, Math.max(1, Math.floor(limit)))
+  const Cve = getCveModel()!
+  const rows = (await Cve.findAll({
+    order: [['published_at', 'DESC']],
+    limit: n,
+    raw: true,
+  })) as unknown as CveDbRowPdf[]
+
+  const out: NvdCveItemWithTr[] = []
+  for (const row of rows) {
+    const item = mapDbRowToNvdCveItemWithTr(row)
+    if (item) out.push(item)
+  }
+  return out
+}
+
 
 export async function loadVulnerabilitiesFromDbPublishedAfterWindowEnd(
   pubEndDate: string,

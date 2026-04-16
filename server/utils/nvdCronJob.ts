@@ -4,7 +4,6 @@ import { getCronSettingsResolved } from './cveSettings'
 import type { CronSettingsData } from './cveSettings'
 import { runNvdScheduledJob } from './nvdScheduledRun'
 
-/** node-cron Nitro bundle ile uyumsuz; Luxon + setInterval kullanıyoruz. */
 
 let pollHandle: ReturnType<typeof setInterval> | null = null
 let lastFiredMinuteKey: string | null = null

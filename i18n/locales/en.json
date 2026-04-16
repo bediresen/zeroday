@@ -19,6 +19,8 @@
     "working": "Working…",
     "fillAll": "Enter username and password.",
     "errorGeneric": "Something went wrong.",
+    "wrongCredentials": "Username or password is incorrect.",
+    "registerSuccess": "Account created. You can sign in now.",
     "registerClosed": "Registration is disabled. Sign in with an existing account."
   },
   "emailLogs": {
@@ -40,13 +42,19 @@
   "pages": {
     "home": {
       "title": "Today's CVEs",
-      "lead": "NVD records for the last completed daily window (timezone and time from settings: previous day at that time → today at that time). Save writes to the DB with Turkish descriptions. Download report builds a PDF from DB rows in that window."
+      "lead": "The first load lists the 100 newest CVEs from the database only. Use “Fetch current CVEs” for the full daily NVD window. Save writes to the DB with Turkish descriptions. Download report builds a PDF from DB rows in that window."
     }
   },
   "feed": {
+    "fetchCurrentCves": "Fetch current CVEs",
+    "quickDashboardHint": "First load shows up to the {n} newest CVEs from the database only. Use “Fetch current CVEs” for the full NVD window before Save, report, or email.",
+    "totalDbPeek": "Records (database)",
+    "actionNeedsFullFetch": "Load the current NVD window with “Fetch current CVEs” first.",
     "refresh": "Refresh",
     "loading": "Loading…",
     "loadingData": "Loading data…",
+    "pageLoading": "Preparing the CVE list, please wait…",
+    "tableRefreshing": "Refreshing list…",
     "pubWindowUtc": "Publication window (UTC)",
     "pubWindow": "Publication window",
     "windowCardHint": "Default: yesterday at your scheduled time → today at that time (upper bound exclusive for NVD). Refresh: same start, end is the current moment.",
@@ -127,7 +135,7 @@
     "smtpTitle": "Email (SMTP)",
     "cronTitle": "Daily NVD sync",
     "cronHint": "Runs at the chosen local time every day (or on selected weekdays). Each run covers the 24 hours ending at that time (e.g. yesterday 09:00–today 09:00).",
-    "cronEmailNote": "To email the PDF report, use «Send email» on the home page; recipients are set under Email.",
+    "cronEmailNote": "After each scheduled NVD sync, a PDF is built for the same window, uploaded to MinIO, and the bulletin is emailed to recipients under Email. If SMTP or recipients are missing, email is skipped; you can still use «Send email» on the home page anytime.",
     "from": "From",
     "fromPh": "Sender name and email",
     "host": "SMTP host",

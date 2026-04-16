@@ -110,6 +110,30 @@ export function countCveSeverityBuckets(items: NvdCveItemWithTr[]): Record<strin
   return counts
 }
 
+function joinTurkishCommaVe(parts: string[]): string {
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0]!
+  if (parts.length === 2) return `${parts[0]!} ve ${parts[1]!}`
+  return `${parts.slice(0, -1).join(', ')} ve ${parts[parts.length - 1]!}`
+}
+
+/**
+ * PDF «Yönetici özeti» şiddet cümlesi; e-posta tablosundaki `countCveSeverityBuckets` ile uyumlu.
+ * Yalnızca sayısı > 0 olan CVSS şiddetleri listelenir.
+ */
+export function formatExecutiveSeverityBreakdownTr(counts: Record<string, number>): string {
+  const chunks: string[] = []
+  for (const key of SEVERITY_ORDER) {
+    const n = counts[key] ?? 0
+    if (n <= 0) continue
+    chunks.push(`${n} adeti ${SEVERITY_LABEL_TR[key].toLowerCase()}`)
+  }
+  if (chunks.length === 0) {
+    return 'Bunların CVSS şiddetine göre dağılımı çıkarılamadı veya tüm kayıtlarda şiddet derecesi belirtilmemiştir.'
+  }
+  return `Bunların ${joinTurkishCommaVe(chunks)}.`
+}
+
 function buildSeverityRowsHtml(counts: Record<string, number>): string {
   let rows = ''
   for (const key of SEVERITY_ORDER) {

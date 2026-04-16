@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { DateTime } from 'luxon'
 import type { TDocumentDefinitions, Content, TableCell } from 'pdfmake/interfaces'
 import { pickCvssV31Strings, pickEnglishDescription } from '../../app/utils/nvdDisplay'
+import { countCveSeverityBuckets, formatExecutiveSeverityBreakdownTr } from './cveReportMjml'
 import type { NvdCveItem, NvdCveItemWithTr } from './nvdCve.helper'
 
 const require = createRequire(import.meta.url)
@@ -249,6 +250,25 @@ type CvssMetricV31 = {
   cvssData?: { baseScore?: number; baseSeverity?: string }
 }
 
+/** NVD `baseSeverity` (İngilizce) → PDF’de Türkçe etiket */
+const CVSS_SEVERITY_LABEL_TR: Record<string, string> = {
+  CRITICAL: 'Kritik',
+  HIGH: 'Yüksek',
+  MEDIUM: 'Orta',
+  LOW: 'Düşük',
+  NONE: 'Yok',
+  UNKNOWN: 'Belirtilmemiş',
+  MODERATE: 'Orta',
+}
+
+function cvssSeverityLabelTr(sev: string | undefined | null): string {
+  if (sev == null) return '—'
+  const t = String(sev).trim()
+  if (!t || t === '—') return t
+  const k = t.toUpperCase()
+  return CVSS_SEVERITY_LABEL_TR[k] ?? t
+}
+
 /** Tablo üst şeridinde tek satır CVSS özeti (CVE kimliği ile aynı satır) */
 function cvssScoreLineForTableHeader(cve: Record<string, unknown> | undefined): string {
   const metrics = cve?.metrics as {
@@ -261,12 +281,12 @@ function cvssScoreLineForTableHeader(cve: Record<string, unknown> | undefined): 
     const score = primary?.cvssData?.baseScore
     const sev = primary?.cvssData?.baseSeverity
     const sc = typeof score === 'number' ? String(score) : '—'
-    const tail = typeof sev === 'string' && sev.trim() ? ` (${sev})` : ''
+    const tail = typeof sev === 'string' && sev.trim() ? ` (${cvssSeverityLabelTr(sev)})` : ''
     return `${sc}${tail}`
   }
   const f = pickCvssV31Strings(cve as NvdCveItem['cve'])
   if (f.score === '—' && f.severity === '—') return '—'
-  return `${f.score} (${f.severity})`
+  return `${f.score} (${cvssSeverityLabelTr(f.severity)})`
 }
 
 function formatCvssBlock(cve: Record<string, unknown> | undefined): string {
@@ -277,7 +297,7 @@ function formatCvssBlock(cve: Record<string, unknown> | undefined): string {
   const list = metrics?.cvssMetricV31?.length ? metrics.cvssMetricV31 : metrics?.cvssMetricV40
   if (!Array.isArray(list) || list.length === 0) {
     const fallback = pickCvssV31Strings(cve as NvdCveItem['cve'])
-    return `${fallback.score} (${fallback.severity})`
+    return `${fallback.score} (${cvssSeverityLabelTr(fallback.severity)})`
   }
   return list
     .map((m) => {
@@ -285,7 +305,7 @@ function formatCvssBlock(cve: Record<string, unknown> | undefined): string {
       const score = m.cvssData?.baseScore
       const sev = m.cvssData?.baseSeverity
       const sc = typeof score === 'number' ? String(score) : '—'
-      const tail = sev ? ` (${sev})` : ''
+      const tail = sev ? ` (${cvssSeverityLabelTr(String(sev))})` : ''
       return `${src}: ${sc}${tail}`
     })
     .join('\n')
@@ -434,12 +454,28 @@ function buildCveDetailTable(
   return block
 }
 
-/** `… (Europe/Istanbul)` gibi sondaki IANA saat dilimi parantezini PDF metninden çıkarır */
-function stripTrailingIanaZoneFromSummary(text: string): string {
-  return text
-    .trim()
-    .replace(/\s*\([A-Za-z][A-Za-z0-9_]*\/[A-Za-z][A-Za-z0-9_/]*\)\s*$/u, '')
-    .trim()
+/**
+ * Yayın penceresi tek satır — ok/Unicode okları yok (pdfmake varsayılan fontta «tofu» olmasın).
+ * Biçim: `15.04.2026 : 15:29 -- 16.04.2026 : 15:29`
+ */
+function formatPublicationWindowLineForPdf(params: {
+  pubStartDate: string
+  pubEndDate: string
+  displayTimeZone: string
+}): string {
+  const tz = params.displayTimeZone?.trim() || 'Europe/Istanbul'
+  const fmt = "dd.LL.yyyy ' : 'HH:mm"
+
+  function formatOne(iso: string): string {
+    const s = iso.trim()
+    if (!s) return '—'
+    const hasZone = /Z$/i.test(s) || /[+-]\d{2}:?\d{2}$/.test(s) || /[+-]\d{4}$/.test(s)
+    const dt = DateTime.fromISO(hasZone ? s : `${s}Z`, { setZone: true })
+    if (!dt.isValid) return s
+    return dt.setZone(tz).toFormat(fmt)
+  }
+
+  return `${formatOne(params.pubStartDate)} -- ${formatOne(params.pubEndDate)}`
 }
 
 export type NvdTodayPdfInput = {
@@ -481,9 +517,21 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
     productBullets
   )
 
-  const windowLineForPdf = input.windowSummary
-    ? stripTrailingIanaZoneFromSummary(input.windowSummary)
-    : `${input.pubStartDate} → ${input.pubEndDate}`
+  const windowLineForPdf = formatPublicationWindowLineForPdf({
+    pubStartDate: input.pubStartDate,
+    pubEndDate: input.pubEndDate,
+    displayTimeZone: tz,
+  })
+
+  const severityCounts = countCveSeverityBuckets(input.vulnerabilities)
+  const severityBreakdownTr = formatExecutiveSeverityBreakdownTr(severityCounts)
+  const totalListed = input.vulnerabilities.length
+
+  const executiveSummaryBody =
+    'Bu belge, Ulusal Güvenlik Açıkları Veritabanı üzerinde ' +
+    `${windowLineForPdf} tarih aralığında yayımlanan güvenlik açıklarının ayrıntılı dökümüdür. ` +
+    `Toplam ${totalListed} adet açık bulunmuştur. ${severityBreakdownTr} ` +
+    'Her kayıt aşağıda kendi tablosunda sunulmuştur. Kurum içi risk değerlendirmesi için referans amaçlıdır.'
 
   const kapakDataUrl = loadKapakCoverDataUrl()
 
@@ -524,60 +572,9 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
     },
     { text: 'Yönetici Özeti', style: 'h2', margin: [0, 0, 0, 8] },
     {
-      text:
-        'Bu belge, Ulusal Güvenlik Açıkları Veritabanı (NVD) üzerinde seçilen yayın penceresinde yayımlanan güvenlik açıklarının ayrıntılı dökümüdür. ' +
-        'Her kayıt aşağıda kendi tablosunda sunulmuştur. Kurum içi risk değerlendirmesi için referans amaçlıdır; kesin teknik kapsam için NVD ve üretici bültenleri esas alınmalıdır.',
+      text: executiveSummaryBody,
       alignment: 'justify',
       fontSize: 10,
-      margin: [0, 0, 0, 10],
-    },
-    {
-      table: {
-        widths: ['*', '*'],
-        body: [
-          [
-            {
-              text: 'Yayın Aralığı',
-              style: 'metaLabel',
-              fillColor: '#eef1f6',
-              margin: [2, 2, 2, 2],
-            },
-            {
-              text: 'Toplam kayıt',
-              style: 'metaLabel',
-              alignment: 'left',
-              fillColor: '#eef1f6',
-              margin: [2, 2, 2, 2],
-            },
-          ],
-          [
-            {
-              text: windowLineForPdf,
-              style: 'metaValue',
-              bold: true,
-              margin: [2, 6, 2, 4],
-              alignment: 'left',
-            },
-            {
-              text: String(input.totalResults),
-              style: 'metaValue',
-              bold: true,
-              margin: [2, 6, 2, 4],
-              alignment: 'left',
-            },
-          ],
-        ],
-      },
-      layout: {
-        hLineWidth: () => 0.55,
-        vLineWidth: () => 0.55,
-        hLineColor: () => '#c8ced9',
-        vLineColor: () => '#c8ced9',
-        paddingLeft: () => 8,
-        paddingRight: () => 8,
-        paddingTop: () => 6,
-        paddingBottom: () => 6,
-      },
       margin: [0, 0, 0, 16],
     },
     { text: 'Zafiyet Barındıran Ürünler', style: 'h2', margin: [0, 0, 0, 8] },
@@ -785,8 +782,6 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
         fillColor: '#eef1f6',
       },
       productCveTableCveCell: { fontSize: 10, color: '#1a1a1a' },
-      metaLabel: { fontSize: 8, bold: true, color: '#666666' },
-      metaValue: { fontSize: 10 },
       cveTableTitle: { fontSize: 13, bold: true },
       detailLabel: { bold: true, fontSize: 9.5 },
       detailValue: { fontSize: 10 },
@@ -799,7 +794,7 @@ export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<B
         margin: [42, 10, 42, 0],
         columns: [
           {
-            text: `Türk Telekom : ${generatedAtFooter}`,
+            text: `turktelekomguvenlik.com`,
             fontSize: 7,
             color: '#888888',
           },

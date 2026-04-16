@@ -46,6 +46,9 @@ interface NvdPayload {
   liveEndRefresh?: boolean
   /** Sunucu: bu sayfa listesindeki CVE’ler bu yayın penceresinde DB’de mi */
   listPersisted?: boolean
+  /** İlk yükleme (dbPeek=1): yalnızca DB’den son N CVE; Kaydet / rapor bu modda kapalı */
+  quickDashboard?: boolean
+  dbPeekLimit?: number
 }
 
 interface NvdApiResponse {
@@ -57,18 +60,22 @@ const { t, locale } = useI18n()
 const { vulnStatus, severity: severityLabel } = useNvdLocale()
 const unauthorizedHandlers = useUnauthorizedRedirectHandlers()
 
-/** 0 = ilk yükleme (artımlı NVD birleşimi); artış = Yenile: başlangıç dün+cron saati, bitiş şu an */
+/** 0 = ilk yükleme (dbPeek, yalnızca DB); artış = Güncel CVE’leri çek (liveEnd=1, NVD) */
 const manualRefreshGeneration = ref(0)
 
 const nvdRequestUrl = computed(() => {
   const base = props.fetchPath
-  if (manualRefreshGeneration.value === 0) return base
   const sep = base.includes('?') ? '&' : '?'
+  if (manualRefreshGeneration.value === 0) {
+    return `${base}${sep}dbPeek=1`
+  }
   return `${base}${sep}liveEnd=1&_=${manualRefreshGeneration.value}`
 })
 
-const { data: nvd, pending, error, refresh } = await useFetch<NvdApiResponse>(nvdRequestUrl, {
-  key: computed(() => `${props.fetchKey}-${manualRefreshGeneration.value}`),
+/** `lazy: true` + `await` yok: giriş sonrası `/` navigasyonu NVD yanıtını beklemez; tablo client’ta yüklenir. */
+const { data: nvd, pending, error, refresh } = useFetch<NvdApiResponse>(nvdRequestUrl, {
+  key: props.fetchKey,
+  lazy: true,
   $fetch: requestFetch,
   ...unauthorizedHandlers,
 })
@@ -80,6 +87,10 @@ async function manualRefreshNvd() {
 
 const vulnerabilities = computed(() => nvd.value?.data?.vulnerabilities ?? [])
 const meta = computed(() => nvd.value?.data)
+
+/** İlk yükleme: henüz `meta` yokken tam kart yükleyici. Yenile: tablo üstü hafif overlay. */
+const showInitialFeedLoader = computed(() => pending.value && !meta.value)
+const showTableRefreshOverlay = computed(() => pending.value && Boolean(meta.value))
 
 /** Cron ayarındaki TZ; yayın penceresi ve gösterim buna göre */
 const displayTimeZone = computed(
@@ -151,12 +162,15 @@ const listCount = computed(() => vulnerabilities.value.length)
 
 const listPersisted = computed(() => meta.value?.listPersisted === true)
 
+const isQuickDashboard = computed(() => meta.value?.quickDashboard === true)
+
 const saveDisabled = computed(
   () =>
     saving.value ||
     pending.value ||
     !vulnerabilities.value.length ||
-    listPersisted.value
+    listPersisted.value ||
+    isQuickDashboard.value
 )
 
 const tableRows = computed(() =>
@@ -236,7 +250,7 @@ function syncReportFilenamePdf(): string {
 }
 
 async function downloadSyncReportPdf() {
-  if (!props.showPdfReport) return
+  if (!props.showPdfReport || meta.value?.quickDashboard) return
   pdfError.value = ''
   pdfMinioMsg.value = ''
   pdfLoading.value = true
@@ -283,7 +297,7 @@ async function downloadSyncReportPdf() {
 }
 
 async function sendReportEmail() {
-  if (!props.showPdfReport || !reportReadyForEmail.value) return
+  if (!props.showPdfReport || !reportReadyForEmail.value || meta.value?.quickDashboard) return
   emailError.value = ''
   emailOk.value = ''
   emailPartial.value = ''
@@ -312,6 +326,7 @@ async function sendReportEmail() {
 }
 
 async function saveToDb() {
+  if (meta.value?.quickDashboard) return
   const list = vulnerabilities.value
   if (!list.length) {
     saveError.value = t('feed.nothingToSave')
@@ -344,7 +359,7 @@ async function saveToDb() {
     const llm = res.data.llm
     const llmPart =
       llm !== undefined
-        ? t('', {
+        ? t('feed.saveLlmPart', {
             reused: llm.reusedFromDb,
             newRows: llm.newRowCount,
             skipped: llm.newRowsSkippedLlm,
@@ -389,7 +404,7 @@ function severityClass(sev: string): string {
         <p class="lead">{{ lead }}</p>
       </div>
       <button type="button" class="btn btn--ghost" :disabled="pending" @click="manualRefreshNvd">
-        {{ pending ? t('feed.loading') : t('feed.refresh') }}
+        {{ pending ? t('feed.loading') : t('feed.fetchCurrentCves') }}
       </button>
     </div>
 
@@ -397,13 +412,22 @@ function severityClass(sev: string): string {
 
     <template v-else-if="meta">
       <div class="meta-hero" aria-live="polite">
-        <span class="meta-hero-label">{{ t('feed.totalNvd') }}</span>
+        <span class="meta-hero-label">{{
+          isQuickDashboard ? t('feed.totalDbPeek') : t('feed.totalNvd')
+        }}</span>
         <span class="meta-hero-number">{{ listCount }}</span>
         <p
-          v-if="typeof meta.totalResults === 'number' && meta.totalResults !== listCount"
+          v-if="!isQuickDashboard && typeof meta.totalResults === 'number' && meta.totalResults !== listCount"
           class="meta-hero-note muted tiny"
         >
           {{ t('feed.totalNvdNote', { nvd: meta.totalResults, list: listCount }) }}
+        </p>
+        <p v-if="isQuickDashboard" class="meta-hero-note muted tiny">
+          {{
+            t('feed.quickDashboardHint', {
+              n: typeof meta.dbPeekLimit === 'number' ? meta.dbPeekLimit : 100,
+            })
+          }}
         </p>
       </div>
       <section class="meta-insights" :aria-label="t('feed.pubWindow')">
@@ -467,9 +491,23 @@ function severityClass(sev: string): string {
       </section>
     </template>
 
-    <div v-if="pending" class="skeleton">{{ t('feed.loadingData') }}</div>
+    <div v-if="showInitialFeedLoader" class="feed-loading" aria-live="polite" aria-busy="true">
+      <span class="feed-loading__spinner" aria-hidden="true" />
+      <p class="feed-loading__title">{{ t('feed.pageLoading') }}</p>
+      <p class="feed-loading__hint">{{ t('feed.loadingData') }}</p>
+    </div>
 
-    <div v-else class="table-wrap">
+    <div v-else class="table-area">
+      <div
+        v-if="showTableRefreshOverlay"
+        class="table-refresh-overlay"
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <span class="table-refresh-overlay__spinner" aria-hidden="true" />
+        <span class="table-refresh-overlay__text">{{ t('feed.tableRefreshing') }}</span>
+      </div>
+      <div class="table-wrap" :class="{ 'table-wrap--dimmed': showTableRefreshOverlay }">
       <table class="data-table">
         <thead>
           <tr>
@@ -517,6 +555,7 @@ function severityClass(sev: string): string {
         </tbody>
       </table>
       <p v-if="!vulnerabilities.length" class="empty">{{ t('feed.emptyWindow') }}</p>
+      </div>
     </div>
 
     <div class="footer-bar">
@@ -540,7 +579,8 @@ function severityClass(sev: string): string {
           v-if="showPdfReport"
           type="button"
           class="btn btn--ghost btn--lg"
-          :disabled="pdfLoading || pending"
+          :disabled="pdfLoading || pending || isQuickDashboard"
+          :title="isQuickDashboard && !pdfLoading ? t('feed.actionNeedsFullFetch') : undefined"
           @click="downloadSyncReportPdf"
         >
           {{ pdfLoading ? t('feed.reportGenerating') : t('feed.downloadReport') }}
@@ -549,9 +589,13 @@ function severityClass(sev: string): string {
           v-if="showPdfReport"
           type="button"
           class="btn btn--ghost btn--lg"
-          :disabled="emailLoading || pending || !reportReadyForEmail"
+          :disabled="emailLoading || pending || !reportReadyForEmail || isQuickDashboard"
           :title="
-            !reportReadyForEmail && !emailLoading ? t('feed.emailNeedsReportFirst') : undefined
+            isQuickDashboard && !emailLoading
+              ? t('feed.actionNeedsFullFetch')
+              : !reportReadyForEmail && !emailLoading
+                ? t('feed.emailNeedsReportFirst')
+                : undefined
           "
           @click="sendReportEmail"
         >
@@ -561,7 +605,13 @@ function severityClass(sev: string): string {
           type="button"
           class="btn btn--primary btn--lg"
           :disabled="saveDisabled"
-          :title="listPersisted && !saving && !pending ? t('feed.saveAlreadySynced') : undefined"
+          :title="
+            isQuickDashboard && !saving && !pending
+              ? t('feed.actionNeedsFullFetch')
+              : listPersisted && !saving && !pending
+                ? t('feed.saveAlreadySynced')
+                : undefined
+          "
           @click="saveToDb"
         >
           {{ saving ? t('feed.saving') : t('feed.save') }}
@@ -889,17 +939,93 @@ h1 {
   }
 }
 
-.skeleton {
+.feed-loading {
   flex: 1 1 auto;
-  min-height: 8rem;
-  padding: 2.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: min(52vh, 22rem);
+  padding: 2.5rem 1.5rem;
   text-align: center;
-  color: var(--app-text-muted);
-  background: linear-gradient(180deg, #fafbfe 0%, #f5f6fa 100%);
+  color: var(--app-text-secondary);
+  background: linear-gradient(180deg, #fafbfe 0%, #f0f2f8 100%);
   border-radius: var(--app-radius-xl);
-  border: 1px dashed rgba(148, 163, 184, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.25);
   box-shadow: var(--app-shadow-sm);
+}
+
+.feed-loading__spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  border: 3px solid rgba(99, 102, 241, 0.2);
+  border-top-color: var(--app-accent, #6366f1);
+  animation: feed-spin 0.75s linear infinite;
+}
+
+.feed-loading__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--app-text);
+  max-width: 22rem;
+  line-height: 1.35;
+}
+
+.feed-loading__hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--app-text-muted);
   font-weight: 500;
+}
+
+@keyframes feed-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.table-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.table-refresh-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: var(--app-radius-xl);
+  background: rgba(250, 251, 254, 0.72);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.table-refresh-overlay__spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  border: 2.5px solid rgba(99, 102, 241, 0.2);
+  border-top-color: var(--app-accent, #6366f1);
+  animation: feed-spin 0.7s linear infinite;
+}
+
+.table-refresh-overlay__text {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--app-text-secondary);
+}
+
+.table-wrap--dimmed {
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
 }
 
 .table-wrap {

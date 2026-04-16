@@ -11,11 +11,28 @@ export default defineEventHandler(async (event) => {
 
   const username = validateUsername(body?.username)
   const password = validatePasswordPlain(body?.password)
-  if (!username || !password) {
+  const pw = body?.password
+
+  if (!username) {
     throw createError({
       statusCode: 400,
-      statusMessage: 'Invalid input',
-      data: { message: 'Geçersiz kullanıcı adı veya şifre formatı.' },
+      statusMessage: 'Geçersiz kullanıcı adı',
+      data: {
+        message:
+          'Kullanıcı adı 3–32 karakter olmalı; yalnızca harf, rakam ve alt çizgi (_) kullanılabilir.',
+        code: 'USERNAME_INVALID',
+      },
+    })
+  }
+  if (!password) {
+    let msg = 'Şifre en az 8, en fazla 128 karakter olmalıdır.'
+    if (typeof pw !== 'string' || !pw.length) msg = 'Şifre girin.'
+    else if (pw.length < 8) msg = 'Şifre en az 8 karakter olmalıdır.'
+    else if (pw.length > 128) msg = 'Şifre en fazla 128 karakter olabilir.'
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Geçersiz şifre',
+      data: { message: msg, code: 'PASSWORD_INVALID' },
     })
   }
 
@@ -35,8 +52,8 @@ export default defineEventHandler(async (event) => {
   if (!ok || !id || !uname) {
     throw createError({
       statusCode: 401,
-      statusMessage: 'Invalid login',
-      data: { message: 'Kullanıcı adı veya şifre hatalı.' },
+      statusMessage: 'Kullanıcı adı veya şifre hatalı.',
+      data: { message: 'Kullanıcı adı veya şifre yanlış.', code: 'LOGIN_FAILED' },
     })
   }
 
