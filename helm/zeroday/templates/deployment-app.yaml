@@ -1,0 +1,133 @@
+{{- if .Values.app }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.app.name }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: app
+    {{- include "zeroday.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.app.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Values.app.name }}
+    spec:
+      {{- if and .Values.postgresql.enabled .Values.minio.enabled }}
+      initContainers:
+        - name: wait-postgres
+          image: {{ .Values.app.init.busyboxImage }}
+          command:
+            - sh
+            - -c
+            - until nc -z {{ .Values.postgresql.name }} 5432; do echo waiting for postgres; sleep 2; done
+        - name: wait-minio
+          image: {{ .Values.app.init.busyboxImage }}
+          command:
+            - sh
+            - -c
+            - until nc -z {{ .Values.minio.name }} 9000; do echo waiting for minio; sleep 2; done
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: app
+          image: {{ include "zeroday.imageRef" (list . .Values.app.image.repository .Values.app.image.tag) }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "3000"
+            - name: NITRO_HOST
+              value: "0.0.0.0"
+            - name: NITRO_PORT
+              value: "3000"
+            - name: NUXT_CVE_DIALECT
+              value: postgres
+            - name: NUXT_CVE_HOST
+              value: {{ .Values.postgresql.name | quote }}
+            - name: NUXT_CVE_PORT
+              value: "5432"
+            - name: NUXT_CVE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: POSTGRES_USER
+            - name: NUXT_CVE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: NUXT_CVE_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: POSTGRES_DB
+            - name: NUXT_MINIO_ENDPOINT
+              value: http://{{ .Values.minio.name }}:9000
+            - name: NUXT_MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: NUXT_MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+            - name: NUXT_MINIO_BUCKET
+              value: {{ .Values.app.minioBucket | quote }}
+            - name: NUXT_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: NUXT_SESSION_SECRET
+            - name: NUXT_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: NUXT_OPENAI_API_KEY
+            - name: NUXT_OPENAI_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: NUXT_OPENAI_MODEL
+            - name: NUXT_OPENAI_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: NUXT_OPENAI_BASE_URL
+            - name: NUXT_AUTH_ALLOW_REGISTER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "zeroday.secretName" . }}
+                  key: NUXT_AUTH_ALLOW_REGISTER
+            - name: NUXT_SESSION_COOKIE_SECURE
+              value: {{ .Values.app.env.nuxtSessionCookieSecure | quote }}
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 25
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+{{- end }}

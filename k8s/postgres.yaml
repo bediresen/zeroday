@@ -1,0 +1,86 @@
+# PostgreSQL — imaj: bediresen/postgres
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeroday-postgres-data
+  labels:
+    app.kubernetes.io/name: zeroday-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zeroday-postgres
+  labels:
+    app.kubernetes.io/name: zeroday-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: zeroday-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zeroday-postgres
+  labels:
+    app.kubernetes.io/name: zeroday-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zeroday-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zeroday-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: docker.io/bediresen/postgres:latest
+          imagePullPolicy: Always
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: zeroday-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -h 127.0.0.1 -p 5432
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              memory: "1Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: zeroday-postgres-data
