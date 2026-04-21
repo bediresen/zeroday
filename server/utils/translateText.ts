@@ -255,9 +255,101 @@ function parseBatchStructuredContent(
   return out
 }
 
+
+const OPENAI_DEBUG_RAW_MAX = 12_000
+
 type ChatCompletionResponse = {
-  choices?: Array<{ message?: { content?: string | null } }>
-  error?: { message?: string }
+  model?: string
+  choices?: Array<{
+    finish_reason?: string
+    message?: {
+      role?: string
+      content?: string | null | unknown[]
+      refusal?: string | null
+      [key: string]: unknown
+    }
+  }>
+  error?: { message?: string; type?: string; code?: string }
+}
+
+function getAssistantTextContent(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null
+  const m = message as Record<string, unknown>
+  const c = m.content
+  if (typeof c === 'string') {
+    const t = c.trim()
+    return t.length ? t : null
+  }
+  if (c === null || c === undefined) return null
+  if (Array.isArray(c)) {
+    const parts: string[] = []
+    for (const item of c) {
+      if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>
+        const text = o.text
+        if (typeof text === 'string' && text.trim()) parts.push(text.trim())
+      } else if (typeof item === 'string' && item.trim()) {
+        parts.push(item.trim())
+      }
+    }
+    const joined = parts.join('\n').trim()
+    return joined.length ? joined : null
+  }
+  return null
+}
+
+function logOpenAiResponseDiagnostics(
+  label: string,
+  attemptIndex: number,
+  r: { ok: boolean; status: number; data: ChatCompletionResponse; raw: string }
+): void {
+  const choice0 = r.data.choices?.[0] as Record<string, unknown> | undefined
+  const msg = choice0?.message as Record<string, unknown> | undefined
+  const rawContent = msg?.content
+  let contentDesc: string
+  if (rawContent === null || rawContent === undefined) {
+    contentDesc = String(rawContent)
+  } else if (typeof rawContent === 'string') {
+    contentDesc = `string(len=${rawContent.length})`
+  } else if (Array.isArray(rawContent)) {
+    contentDesc = `array(len=${rawContent.length})`
+  } else {
+    contentDesc = typeof rawContent
+  }
+
+  const refusal = typeof msg?.refusal === 'string' ? msg.refusal : undefined
+  const summary = {
+    httpOk: r.ok,
+    status: r.status,
+    model: r.data.model,
+    finish_reason: choice0?.finish_reason,
+    refusal: refusal ? refusal.slice(0, 800) : undefined,
+    contentKind: contentDesc,
+    messageKeys: msg ? Object.keys(msg) : [],
+    apiError: r.data.error,
+  }
+  console.warn(`[openai][${label}] attempt=${attemptIndex} diagnostics: ${JSON.stringify(summary)}`)
+
+  const rawTrim =
+    r.raw.length > OPENAI_DEBUG_RAW_MAX
+      ? `${r.raw.slice(0, OPENAI_DEBUG_RAW_MAX)}\n...[truncated ${r.raw.length - OPENAI_DEBUG_RAW_MAX} chars]`
+      : r.raw
+  console.warn(`[openai][${label}] attempt=${attemptIndex} raw JSON:\n${rawTrim}`)
+}
+
+/**
+ * GPT-5 / o-serisi: `max_completion_tokens` hem içgörü hem görünür çıktıyı kapsar.
+ * İçgörü kotayı doldurursa `message.content` boş kalır (`finish_reason: length`).
+ * Chat Completions için `reasoning_effort` kullanılır (Responses API `reasoning.effort` farklıdır).
+ */
+function applyChatCompletionsReasoningDefaults(body: Record<string, unknown>): Record<string, unknown> {
+  const model = typeof body.model === 'string' ? body.model : ''
+  const m = model.toLowerCase()
+  const isReasoningFamily =
+    m.includes('gpt-5') || m.includes('o3') || m.includes('o4') || m.startsWith('o1')
+  if (!isReasoningFamily) return body
+  if (Object.prototype.hasOwnProperty.call(body, 'reasoning_effort')) return body
+  return { ...body, reasoning_effort: 'minimal' }
 }
 
 async function openAiChatCompletion(
@@ -266,13 +358,14 @@ async function openAiChatCompletion(
   body: Record<string, unknown>
 ): Promise<{ ok: boolean; status: number; data: ChatCompletionResponse; raw: string }> {
   const url = `${baseUrl}/chat/completions`
+  const payload = applyChatCompletionsReasoningDefaults(body)
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   })
   const raw = await res.text()
   let data: ChatCompletionResponse
@@ -335,10 +428,11 @@ ${userPayload}`
     { role: 'user' as const, content: userMessage },
   ]
 
+  const singleMaxTokens = Math.min(65536, 32768)
   const tryBodies: Record<string, unknown>[] = [
     {
       model,
-      max_completion_tokens: 8192,
+      max_completion_tokens: singleMaxTokens,
       messages: baseMessages,
       response_format: {
         type: 'json_schema',
@@ -347,13 +441,13 @@ ${userPayload}`
     },
     {
       model,
-      max_completion_tokens: 8192,
+      max_completion_tokens: singleMaxTokens,
       messages: baseMessages,
       response_format: { type: 'json_object' },
     },
     {
       model,
-      max_completion_tokens: 8192,
+      max_completion_tokens: singleMaxTokens,
       messages: [
         {
           role: 'system' as const,
@@ -378,8 +472,9 @@ ${userPayload}`
         lastErr = r.data.error?.message ?? r.raw.slice(0, 400)
         continue
       }
-      const content = r.data.choices?.[0]?.message?.content
-      if (typeof content !== 'string' || !content.trim()) {
+      const content = getAssistantTextContent(r.data.choices?.[0]?.message)
+      if (!content) {
+        logOpenAiResponseDiagnostics('translateCveStructuredEnToTr', attempt, r)
         lastErr = 'empty content'
         continue
       }
@@ -444,7 +539,8 @@ async function translateCveBatchStructuredEnToTr(
   ]
 
   const expectedIds = batch.map((b) => b.cveId.trim() || 'UNKNOWN')
-  const maxOut = Math.min(16384, 2048 + n * 900)
+  /** GPT-5: içgörü + büyük JSON; aksi halde tüm kota reasoning_tokens ile biter. */
+  const maxOut = Math.min(65536, Math.max(32000, 2048 + n * 900))
 
   const tryBodies: Record<string, unknown>[] = [
     {
@@ -489,8 +585,9 @@ async function translateCveBatchStructuredEnToTr(
         lastErr = r.data.error?.message ?? r.raw.slice(0, 400)
         continue
       }
-      const content = r.data.choices?.[0]?.message?.content
-      if (typeof content !== 'string' || !content.trim()) {
+      const content = getAssistantTextContent(r.data.choices?.[0]?.message)
+      if (!content) {
+        logOpenAiResponseDiagnostics('translateCveBatchStructuredEnToTr', attempt, r)
         lastErr = 'empty content'
         continue
       }

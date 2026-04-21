@@ -1,0 +1,30 @@
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zeroday-app
+  labels:
+    app.kubernetes.io/name: zeroday-app
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "500"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "500"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "500"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: zeroday.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zeroday-app
+                port:
+                  number: 3000
+  # TLS: cert Secret hazır olunca açın
+  # tls:
+  #   - hosts:
+  #       - zeroday.example.com
+  #     secretName: zeroday-app-tls

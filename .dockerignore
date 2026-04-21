@@ -1,13 +1,27 @@
+# Dependencies & caches
 node_modules
-.nuxt
+npm-debug.log*
+.pnpm-store
+
+# Build outputs (rebuilt in image)
 .output
+.nuxt
+dist
+.cache
+
+# Git & IDE
 .git
+.gitignore
+.cursor
+.idea
+.vscode
+*.md
+
+# Local env (inject at runtime: Kubernetes secrets, docker run -e, compose env_file)
 .env
 .env.*
 !.env.example
-*.md
-.DS_Store
+
+# OS
 Thumbs.db
-.cursor
-.vscode
-.idea
+.DS_Store

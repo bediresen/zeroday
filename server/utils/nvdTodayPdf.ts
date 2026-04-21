@@ -8,18 +8,25 @@ import { pickCvssV31Strings, pickEnglishDescription } from '../../app/utils/nvdD
 import { countCveSeverityBuckets, formatExecutiveSeverityBreakdownTr } from './cveReportMjml'
 import type { NvdCveItem, NvdCveItemWithTr } from './nvdCve.helper'
 
-const require = createRequire(import.meta.url)
+function createPdfRequire() {
+  const cwd = process.cwd()
+  const nitroAnchor = join(cwd, '.output', 'server', 'index.mjs')
+  const anchor = existsSync(nitroAnchor) ? nitroAnchor : join(cwd, 'package.json')
+  return createRequire(anchor)
+}
+
+const pdfRequire = createPdfRequire()
 
 let pdfMakeReady = false
 
 function ensurePdfMake() {
   if (pdfMakeReady) return
-  const pdfMake = require('pdfmake') as {
+  const pdfMake = pdfRequire('pdfmake') as {
     virtualfs: { writeFileSync: (name: string, buf: Buffer) => void }
     setFonts: (f: Record<string, unknown>) => void
     createPdf: (def: TDocumentDefinitions) => { getBuffer: () => Promise<Buffer> }
   }
-  const vfs = require('pdfmake/build/vfs_fonts.js') as Record<string, string>
+  const vfs = pdfRequire('pdfmake/build/vfs_fonts.js') as Record<string, string>
   for (const key of Object.keys(vfs)) {
     const b64 = vfs[key]
     if (typeof b64 !== 'string') continue
@@ -492,7 +499,7 @@ export type NvdTodayPdfInput = {
 
 export async function buildNvdTodayPdfBuffer(input: NvdTodayPdfInput): Promise<Buffer> {
   ensurePdfMake()
-  const pdfMake = require('pdfmake') as {
+  const pdfMake = pdfRequire('pdfmake') as {
     createPdf: (def: TDocumentDefinitions) => { getBuffer: () => Promise<Buffer> }
   }
 

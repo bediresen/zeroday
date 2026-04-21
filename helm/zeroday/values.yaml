@@ -1,0 +1,87 @@
+global:
+  imageRegistry: ""
+
+existingSecretName: ""
+
+secrets:
+  create: true
+  stringData:
+    POSTGRES_USER: "postgres"
+    POSTGRES_PASSWORD: "postgres"
+    POSTGRES_DB: "zeroday"
+    MINIO_ROOT_USER: "user"
+    MINIO_ROOT_PASSWORD: "password"
+    NUXT_SESSION_SECRET: ""
+    NUXT_OPENAI_API_KEY: ""
+    NUXT_OPENAI_MODEL: "gpt-5-nano"
+    NUXT_OPENAI_BASE_URL: "https://api.openai.com/v1"
+    NUXT_AUTH_ALLOW_REGISTER: "true"
+
+app:
+  name: zeroday-app
+  replicaCount: 1
+  image:
+    repository: bediresen/zeroday-app
+    tag: latest
+    pullPolicy: Always
+  service:
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  env:
+    nuxtSessionCookieSecure: "false"
+  minioBucket: cve-reports
+  init:
+    busyboxImage: busybox:1.36
+
+postgresql:
+  enabled: true
+  name: zeroday-postgres
+  replicaCount: 1
+  image:
+    repository: bediresen/postgres
+    tag: latest
+    pullPolicy: Always
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+minio:
+  enabled: true
+  name: zeroday-minio
+  replicaCount: 1
+  image:
+    repository: bediresen/minio
+    tag: latest
+    pullPolicy: Always
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: zeroday.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "500"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "500"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "500"
+  tls: []

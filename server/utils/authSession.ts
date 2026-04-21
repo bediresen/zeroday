@@ -24,13 +24,22 @@ export function getAuthSessionConfig(): SessionConfig {
     password = DEV_FALLBACK_SECRET
   }
 
+  /** Üretimde varsayılan true (yalnız HTTPS). HTTP (port-forward, iç Ingress) için NUXT_SESSION_COOKIE_SECURE=false */
+  const cookieSecureEnv = process.env.NUXT_SESSION_COOKIE_SECURE?.trim().toLowerCase()
+  const secure =
+    cookieSecureEnv === 'false' || cookieSecureEnv === '0'
+      ? false
+      : cookieSecureEnv === 'true' || cookieSecureEnv === '1'
+        ? true
+        : process.env.NODE_ENV === 'production'
+
   return {
     password,
     maxAge: 60 * 60 * 24 * 7,
     name: 'zeroday',
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure,
       sameSite: 'lax',
       path: '/',
     },
