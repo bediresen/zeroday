@@ -12,7 +12,7 @@ import {
 } from './minioReportUpload'
 import { buildNvdTodayPdfBuffer } from './nvdTodayPdf'
 import { loadVulnerabilitiesForPdfFromDb } from './nvdCve.helper'
-import { resolveNvdPublicationWindow } from './nvdPublicationWindow'
+import { resolveReportPublicationWindow } from './nvdPublicationWindow'
 import { MailHelper } from './mail.helper'
 
 function buildReportPdfNames(pubEndDateIso: string): { filenameAscii: string; objectKey: string } {
@@ -64,6 +64,11 @@ export type DispatchCveReportEmailOptions = {
   tryMinioPdfFirst?: boolean
   /** true: PDF üretildikten sonra MinIO’ya yükle (cron sonrası arşiv). */
   uploadPdfToMinioAfterBuild?: boolean
+  /**
+   * true (varsayılan): bitiş = gönderim anı; tablo `liveEnd` ile uyumlu.
+   * false: yalnızca günlük cron penceresi üst sınırı (zamanlanmış job bülteni).
+   */
+  livePublicationEnd?: boolean
 }
 
 /**
@@ -74,6 +79,7 @@ export async function dispatchCveReportEmail(
 ): Promise<DispatchCveReportEmailResult> {
   const tryMinioPdfFirst = options.tryMinioPdfFirst !== false
   const uploadPdfToMinioAfterBuild = options.uploadPdfToMinioAfterBuild === true
+  const livePublicationEnd = options.livePublicationEnd !== false
 
   const emailCfg = await getEmailSettingsResolved()
   const recipientList = [...new Set(emailCfg.recipientEmails.map((e) => e.trim()).filter(Boolean))]
@@ -112,7 +118,7 @@ export async function dispatchCveReportEmail(
   let logSubject: string | null = null
 
   try {
-    const pubWindow = await resolveNvdPublicationWindow()
+    const pubWindow = await resolveReportPublicationWindow(livePublicationEnd, new Date())
     const vulnerabilities = await loadVulnerabilitiesForPdfFromDb(
       pubWindow.pubStartDate,
       pubWindow.pubEndDate

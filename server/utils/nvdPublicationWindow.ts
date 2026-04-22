@@ -88,6 +88,37 @@ export async function resolveNvdPublicationWindow(now: Date = new Date()): Promi
   }
 }
 
+
+export async function resolveReportPublicationWindow(
+  liveEnd: boolean,
+  now: Date = new Date()
+): Promise<NvdPublicationWindow> {
+  const window = await resolveNvdPublicationWindow(now)
+  if (!liveEnd) return window
+
+  const cronCfg = await getCronSettingsResolved()
+  const comp = computeScheduledBoundaryPublicationWindow({
+    timeZone: cronCfg.timeZone,
+    hour: cronCfg.hour,
+    minute: cronCfg.minute,
+    now,
+  })
+  const pubStartDate = comp.pubStartDate
+  const pubEndDate = DateTime.fromJSDate(now, { zone: 'utc' }).toISO()!
+  const startLabel = comp.windowStart.setZone(cronCfg.timeZone).toFormat('dd.MM.yyyy HH:mm')
+  const endLabel = DateTime.fromJSDate(now).setZone(cronCfg.timeZone).toFormat('dd.MM.yyyy HH:mm')
+  const windowSummary = `${startLabel} → ${endLabel} (${cronCfg.timeZone})`
+  const windowEndExclusiveUtcIso = pubEndDate
+
+  return {
+    ...window,
+    pubStartDate,
+    pubEndDate,
+    windowSummary,
+    windowEndExclusiveUtcIso,
+  }
+}
+
 /** Liste / e-posta üst bilgisi: `resolveNvdPublicationWindow` ile aynı pencere özeti */
 export async function getLiveFeedWindowSummary(): Promise<string> {
   const cron = await getCronSettingsResolved()

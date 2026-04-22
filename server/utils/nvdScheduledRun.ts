@@ -34,6 +34,7 @@ export async function runNvdScheduledJob(): Promise<void> {
   const emailResult = await dispatchCveReportEmail({
     tryMinioPdfFirst: false,
     uploadPdfToMinioAfterBuild: true,
+    livePublicationEnd: false,
   })
   switch (emailResult.kind) {
     case 'validation':

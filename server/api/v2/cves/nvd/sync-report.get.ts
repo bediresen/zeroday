@@ -4,7 +4,7 @@ import {
   buildMinioReportObjectKey,
   uploadCveReportPdfToMinio,
 } from '../../../../utils/minioReportUpload'
-import { resolveNvdPublicationWindow } from '../../../../utils/nvdPublicationWindow'
+import { resolveReportPublicationWindow } from '../../../../utils/nvdPublicationWindow'
 
 /**
  * NVD senkron ile aynı yayın penceresi için PDF.
@@ -13,7 +13,7 @@ import { resolveNvdPublicationWindow } from '../../../../utils/nvdPublicationWin
  */
 export default defineEventHandler(async (event) => {
   try {
-    const pubWindow = await resolveNvdPublicationWindow()
+    const pubWindow = await resolveReportPublicationWindow(true, new Date())
 
     const vulnerabilities = await loadVulnerabilitiesForPdfFromDb(
       pubWindow.pubStartDate,

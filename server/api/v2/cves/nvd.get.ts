@@ -1,4 +1,3 @@
-import { DateTime } from 'luxon'
 import {
   areListCvesPersistedInWindow,
   attachDescriptionTrFromDb,
@@ -8,11 +7,7 @@ import {
   loadVulnerabilitiesForPdfFromDb,
   mergeVulnerabilitiesDedupe,
 } from '../../../utils/nvdCve.helper'
-import {
-  computeScheduledBoundaryPublicationWindow,
-  resolveNvdPublicationWindow,
-} from '../../../utils/nvdPublicationWindow'
-import { getCronSettingsResolved } from '../../../utils/cveSettings'
+import { resolveNvdPublicationWindow, resolveReportPublicationWindow } from '../../../utils/nvdPublicationWindow'
 
 function parseLiveEndFlag(raw: Record<string, unknown>): boolean {
   const le = raw.liveEnd
@@ -71,19 +66,11 @@ export default defineEventHandler(async (event) => {
     let windowEndExclusiveUtcIso = window.windowEndExclusiveUtcIso
 
     if (liveEnd) {
-      const cronCfg = await getCronSettingsResolved()
-      const comp = computeScheduledBoundaryPublicationWindow({
-        timeZone: cronCfg.timeZone,
-        hour: cronCfg.hour,
-        minute: cronCfg.minute,
-        now: requestNow,
-      })
-      pubStartDate = comp.pubStartDate
-      pubEndDate = DateTime.fromJSDate(requestNow, { zone: 'utc' }).toISO()!
-      const startLabel = comp.windowStart.setZone(cronCfg.timeZone).toFormat('dd.MM.yyyy HH:mm')
-      const endLabel = DateTime.fromJSDate(requestNow).setZone(cronCfg.timeZone).toFormat('dd.MM.yyyy HH:mm')
-      windowSummary = `${startLabel} → ${endLabel} (${cronCfg.timeZone})`
-      windowEndExclusiveUtcIso = pubEndDate
+      const w = await resolveReportPublicationWindow(true, requestNow)
+      pubStartDate = w.pubStartDate
+      pubEndDate = w.pubEndDate
+      windowSummary = w.windowSummary
+      windowEndExclusiveUtcIso = w.windowEndExclusiveUtcIso
     }
 
     if (dbPeek) {

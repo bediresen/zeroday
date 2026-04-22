@@ -7,28 +7,33 @@ import {
 } from './db'
 
 let cveSchemaEnsured = false
-
+/** Aynı anda gelen çağrılar tek DB şema turunda birleşir (ör. ayarlar GET’inde Promise.all). */
+let ensureInFlight: Promise<void> | null = null
 
 export async function ensureCveSchema(): Promise<void> {
   if (cveSchemaEnsured) return
+  if (!ensureInFlight) {
+    ensureInFlight = (async () => {
+      await runEnsureCveSchemaBody()
+      cveSchemaEnsured = true
+    })().finally(() => {
+      ensureInFlight = null
+    })
+  }
+  await ensureInFlight
+}
 
-  const Cve = getCveModel()
-  await Cve.sync()
-
-  const CveSetting = getCveSettingsModel()
-  await CveSetting.sync()
-
-  const CveEmailLog = getCveEmailLogModel()
-  await CveEmailLog.sync()
-
-  const User = getUserModel()
-  await User.sync()
+async function runEnsureCveSchemaBody(): Promise<void> {
+  const sequelize = getSequelize()
+  getCveModel()
+  getCveSettingsModel()
+  getCveEmailLogModel()
+  getUserModel()
+  await sequelize.sync()
 
   await migrateDescriptionTrColumnIfNeeded()
   await migrateAffectedProductsColumnIfNeeded()
   await ensureCvesPublishedAtIndexIfNeeded()
-
-  cveSchemaEnsured = true
 }
 
 /**
