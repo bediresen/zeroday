@@ -79,6 +79,12 @@ export function defineCveModel(sequelize: Sequelize): ModelCtor<CveModel> {
       modelName: 'Cve',
       tableName: 'cves',
       timestamps: false,
+      indexes: [
+        {
+          name: 'idx_cves_published_at',
+          fields: ['published_at'],
+        },
+      ],
     }
   )
 }

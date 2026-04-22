@@ -26,6 +26,7 @@ export async function ensureCveSchema(): Promise<void> {
 
   await migrateDescriptionTrColumnIfNeeded()
   await migrateAffectedProductsColumnIfNeeded()
+  await ensureCvesPublishedAtIndexIfNeeded()
 
   cveSchemaEnsured = true
 }
@@ -55,6 +56,31 @@ async function migrateDescriptionTrColumnIfNeeded(): Promise<void> {
         throw e
       }
     }
+  }
+}
+
+/** `published_at` aralık / sıralama sorguları için (mevcut DB’lerde idempotent). */
+async function ensureCvesPublishedAtIndexIfNeeded(): Promise<void> {
+  const sequelize = getSequelize()
+  const dialect = sequelize.getDialect()
+
+  if (dialect === 'postgres' || dialect === 'sqlite') {
+    await sequelize.query(
+      'CREATE INDEX IF NOT EXISTS idx_cves_published_at ON cves (published_at)'
+    )
+    return
+  }
+
+  try {
+    await sequelize.query('CREATE INDEX idx_cves_published_at ON cves (published_at)')
+  } catch (e: unknown) {
+    const parent = e as { parent?: { errno?: number }; message?: string }
+    const errno = parent?.parent?.errno
+    const msg = parent?.message ?? (e instanceof Error ? e.message : String(e))
+    if (errno === 1061 || /Duplicate key name|already exists/i.test(msg)) {
+      return
+    }
+    throw e
   }
 }
 
